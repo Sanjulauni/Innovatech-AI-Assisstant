@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.config import ModelProvider, Settings
+from src.config import PROJECT_ROOT, ModelProvider, Settings
 from tests.conftest import make_settings
 
 
@@ -61,3 +61,44 @@ def test_collection_name_respects_chroma_limits():
     settings = make_settings(gemini_embedding_model="x" * 100)
     assert len(settings.collection_name) <= 63
     assert settings.collection_name[-1].isalnum()
+
+
+def test_admin_disabled_without_password():
+    assert make_settings().admin_enabled is False
+
+
+@pytest.mark.parametrize("password", ["", "   "])
+def test_blank_admin_password_disables_admin(password):
+    settings = make_settings(admin_password=password)
+    assert settings.admin_password is None
+    assert settings.admin_enabled is False
+
+
+def test_admin_password_read_from_environment_and_hidden(monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "s3cret-admin")
+    settings = Settings(_env_file=None, google_api_key="test-key")
+    assert settings.admin_enabled is True
+    assert settings.admin_password.get_secret_value() == "s3cret-admin"
+    assert "s3cret-admin" not in repr(settings)
+
+
+def test_chat_history_limit_default_and_validation():
+    assert make_settings().chat_history_limit == 6
+    assert make_settings(chat_history_limit=0).chat_history_limit == 0
+    with pytest.raises(ValidationError):
+        make_settings(chat_history_limit=-1)
+
+
+def test_relative_paths_are_resolved_against_project_root():
+    settings = make_settings(instructions_file="data/custom.json", raw_data_dir="uploads")
+    assert settings.instructions_file == PROJECT_ROOT / "data" / "custom.json"
+    assert settings.raw_data_dir == PROJECT_ROOT / "uploads"
+
+
+def test_absolute_paths_are_kept(tmp_path):
+    settings = make_settings(instructions_file=tmp_path / "i.json")
+    assert settings.instructions_file == tmp_path / "i.json"
+
+
+def test_max_upload_size_bytes():
+    assert make_settings(max_upload_size_mb=2).max_upload_size_bytes == 2 * 1024 * 1024

@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     raw_data_dir: Path = PROJECT_ROOT / "data" / "raw"
     vector_db_dir: Path = PROJECT_ROOT / "data" / "vector_db"
     collection_prefix: str = "innovatech"
+    instructions_file: Path = PROJECT_ROOT / "data" / "agent_instructions.json"
 
     # --- Ingestion ---------------------------------------------------------
     chunk_size: int = Field(default=1000, gt=0)
@@ -62,12 +63,17 @@ class Settings(BaseSettings):
 
     # --- Retrieval ---------------------------------------------------------
     retriever_top_k: int = Field(default=4, gt=0)
+    # Number of previous chat messages (user + assistant) sent with each question.
+    chat_history_limit: int = Field(default=6, ge=0)
 
     # --- API & UI ----------------------------------------------------------
     api_host: str = "127.0.0.1"
     api_port: int = 8000
-    api_key: SecretStr | None = None
     api_base_url: str = "http://127.0.0.1:8000"
+
+    # --- Access control ----------------------------------------------------
+    # Password for the admin endpoints and page. Admin features are disabled if unset.
+    admin_password: SecretStr | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:
@@ -82,11 +88,29 @@ class Settings(BaseSettings):
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
 
+        if self.admin_password is not None and not self.admin_password.get_secret_value().strip():
+            self.admin_password = None
+
+        # Relative paths in .env are relative to the project root, not the working directory.
+        for field in ("raw_data_dir", "vector_db_dir", "instructions_file"):
+            path = getattr(self, field)
+            if not path.is_absolute():
+                setattr(self, field, PROJECT_ROOT / path)
+
         self.allowed_extensions = {
             ext.lower() if ext.startswith(".") else f".{ext.lower()}"
             for ext in self.allowed_extensions
         }
         return self
+
+    @property
+    def admin_enabled(self) -> bool:
+        """Whether admin features are available (``ADMIN_PASSWORD`` is set)."""
+        return self.admin_password is not None
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.max_upload_size_mb * 1024 * 1024
 
     @property
     def llm_model_name(self) -> str:
