@@ -212,12 +212,6 @@ uvicorn src.api.app:app
 
 Open **<http://localhost:8000>**. API docs (Swagger) are at **<http://localhost:8000/docs>**.
 
-### Streamlit UI (legacy)
-
-```bash
-streamlit run src/ui/app.py
-```
-
 ---
 
 ## 🧭 First Steps
