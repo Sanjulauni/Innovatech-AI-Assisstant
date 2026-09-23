@@ -3,13 +3,9 @@
 A fake chat model records the prompts it receives, so no Gemini calls are made.
 """
 
-from typing import Any
-
 import pytest
 from langchain_core.documents import Document
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from pydantic import Field
 
 from src.data_pipeline.vector_store import SearchResult
 from src.rag_engine.instructions import InstructionsStore
@@ -24,21 +20,7 @@ from src.rag_engine.prompts import (
 )
 from src.rag_engine.retriever import DocumentRetriever, build_search_query
 from tests.conftest import make_settings
-
-
-class RecordingChatModel(FakeListChatModel):
-    """Fake LLM that returns canned responses and remembers every prompt."""
-
-    prompts: list[list[Any]] = Field(default_factory=list)
-
-    def _call(self, messages, *args, **kwargs):
-        self.prompts.append(messages)
-        return super()._call(messages, *args, **kwargs)
-
-
-class BrokenChatModel(FakeListChatModel):
-    def _call(self, *args, **kwargs):
-        raise ConnectionError("Gemini unreachable")
+from tests.fakes import BrokenChatModel, RecordingChatModel
 
 
 def add_doc(repository, doc_id, source, *texts, page=None):
