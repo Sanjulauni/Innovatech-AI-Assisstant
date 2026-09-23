@@ -1,0 +1,20 @@
+[project]
+name = "innovatech-rag-assistant"
+version = "0.1.0"
+description = "Secure internal RAG document assistant for InnovaTech"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N"]
