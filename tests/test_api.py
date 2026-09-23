@@ -62,7 +62,7 @@ def test_health(client):
         "vector_store": "ok",
         "documents": 1,
         "llm_provider": "gemini",
-        "llm_model": "gemini-2.5-flash",
+        "llm_model": "gemini-3-flash-preview",
         "embedding_model": "models/gemini-embedding-001",
         "admin_enabled": True,
     }

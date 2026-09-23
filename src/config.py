@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     # --- Gemini API --------------------------------------------------------
     google_api_key: SecretStr | None = None
-    gemini_llm_model: str = "gemini-2.5-flash"
+    gemini_llm_model: str = "gemini-3-flash-preview"
     gemini_embedding_model: str = "models/gemini-embedding-001"
 
     # --- Data & vector store -----------------------------------------------
