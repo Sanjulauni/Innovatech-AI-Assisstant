@@ -28,6 +28,8 @@ coverage/
 
 # Runtime data written by the app
 data/agent_instructions.json
+data/model_selection.json
+data/models/
 
 # Sample company documents for local testing (third-party, not committed)
 sample_docs/

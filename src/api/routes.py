@@ -47,6 +47,10 @@ from src.api.schemas import (
     InstructionsOut,
     LoginRequest,
     LoginResponse,
+    ModelOptionOut,
+    ModelSelectIn,
+    ModelsOut,
+    ReindexResponse,
     SourceOut,
     UploadResponse,
 )
@@ -86,7 +90,7 @@ def health(services: ServicesDep) -> HealthResponse:
         vector_store="ok" if store_ok else "error",
         documents=documents,
         llm_provider=settings.llm_provider.value,
-        llm_model=settings.llm_model_name,
+        llm_model=services.models.current(),
         embedding_model=settings.embedding_model_name,
         admin_enabled=settings.admin_enabled,
     )
@@ -284,11 +288,48 @@ async def upload_document(
     )
 
 
+@admin_router.post("/documents/reindex", response_model=ReindexResponse)
+def reindex_documents(services: ServicesDep) -> ReindexResponse:
+    """Index every saved file that isn't in the knowledge base yet (e.g. after the
+    embedding model changed). Already-indexed files are skipped."""
+    results, errors = services.ingestion.ingest_directory()
+    indexed = sum(r.status is IngestionStatus.INGESTED for r in results)
+    return ReindexResponse(indexed=indexed, skipped=len(results) - indexed, failed=errors)
+
+
 @admin_router.delete("/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(doc_id: DocId, services: ServicesDep) -> Response:
     if not services.ingestion.delete(doc_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Admin model choice --------------------------------------------------------
+
+
+def _models(services: ServicesDep) -> ModelsOut:
+    return ModelsOut(
+        current=services.models.current(),
+        options=[ModelOptionOut(**vars(option)) for option in services.models.options()],
+    )
+
+
+@admin_router.get("/model", response_model=ModelsOut)
+def get_model(services: ServicesDep) -> ModelsOut:
+    return _models(services)
+
+
+@admin_router.put("/model", response_model=ModelsOut)
+def select_model(body: ModelSelectIn, services: ServicesDep) -> ModelsOut:
+    """Choose the chat model. It is used from the next question on."""
+    try:
+        services.models.select(body.model)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return _models(services)
+
+
+# --- Admin instructions --------------------------------------------------------
 
 
 @admin_router.get("/instructions", response_model=InstructionsOut)

@@ -9,13 +9,13 @@ import logging
 import re
 from collections.abc import Iterator
 
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from src.config import Settings, get_settings
 from src.data_pipeline.vector_store import SearchResult
-from src.model_factory import is_rate_limited
+from src.model_factory import ChatModel, is_rate_limited
 from src.rag_engine.instructions import InstructionsStore
+from src.rag_engine.model_selector import ModelSelector
 from src.rag_engine.models import Answer, ChatMessage, Source
 from src.rag_engine.prompts import NOT_FOUND_MESSAGE, build_messages
 from src.rag_engine.retriever import DocumentRetriever
@@ -40,11 +40,12 @@ class RAGChain:
     def __init__(
         self,
         retriever: DocumentRetriever,
-        llm: BaseChatModel,
+        llm: ChatModel | ModelSelector,
         instructions: InstructionsStore | None = None,
         history_limit: int = 6,
     ) -> None:
         self._retriever = retriever
+        # A selector means the admin's current choice is used for each question.
         self._llm = llm
         self._instructions = instructions
         self._history_limit = history_limit
@@ -53,7 +54,7 @@ class RAGChain:
     def from_settings(
         cls,
         retriever: DocumentRetriever,
-        llm: BaseChatModel,
+        llm: ChatModel | ModelSelector,
         instructions: InstructionsStore | None = None,
         settings: Settings | None = None,
     ) -> RAGChain:
@@ -67,7 +68,7 @@ class RAGChain:
             return Answer(answer=NOT_FOUND_MESSAGE)
 
         try:
-            response = self._llm.invoke(self._messages(question, history, results))
+            response = self._current_llm().invoke(self._messages(question, history, results))
         except Exception as exc:
             raise _llm_error(exc) from exc
         return self._finish(response.text, results)
@@ -89,7 +90,7 @@ class RAGChain:
 
         parts: list[str] = []
         try:
-            for chunk in self._llm.stream(self._messages(question, history, results)):
+            for chunk in self._current_llm().stream(self._messages(question, history, results)):
                 if chunk.text:
                     parts.append(chunk.text)
                     yield chunk.text
@@ -125,6 +126,9 @@ class RAGChain:
     def _finish(self, text: str, results: list[SearchResult]) -> Answer:
         text = text.strip() or NOT_FOUND_MESSAGE
         return Answer(answer=text, sources=self._select_sources(text, results))
+
+    def _current_llm(self) -> ChatModel:
+        return self._llm.llm() if isinstance(self._llm, ModelSelector) else self._llm
 
     def _trim(self, history: list[ChatMessage]) -> list[ChatMessage]:
         if self._history_limit == 0:

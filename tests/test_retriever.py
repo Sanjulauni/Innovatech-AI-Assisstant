@@ -1,6 +1,6 @@
 """Tests for the retriever, prompts and RAG chain (FR-12 – FR-16, NFR-04, NFR-20).
 
-A fake chat model records the prompts it receives, so no Gemini calls are made.
+A fake chat model records the prompts it receives, so no real model is called.
 """
 
 import pytest

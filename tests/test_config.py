@@ -3,38 +3,56 @@
 import pytest
 from pydantic import ValidationError
 
-from src.config import PROJECT_ROOT, ModelProvider, Settings
+from src.config import PROJECT_ROOT, EmbeddingProvider, ModelProvider, Settings
 from tests.conftest import make_settings
 
 
-def test_defaults_to_gemini():
+def test_defaults_to_groq_and_local_embeddings():
     settings = make_settings()
-    assert settings.llm_provider is ModelProvider.GEMINI
-    assert settings.llm_model_name == settings.gemini_llm_model
-    assert settings.embedding_model_name == settings.gemini_embedding_model
+    assert settings.llm_provider is ModelProvider.GROQ
+    assert settings.embedding_provider is EmbeddingProvider.FASTEMBED
+    assert settings.default_model == "openai/gpt-oss-120b"
+    assert settings.available_models == [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+    ]
+    assert settings.embedding_model_name == "BAAI/bge-small-en-v1.5"
 
 
 def test_api_key_read_from_environment(monkeypatch):
-    monkeypatch.setenv("GOOGLE_API_KEY", "env-key")
+    monkeypatch.setenv("GROQ_API_KEY", "env-key")
     settings = Settings(_env_file=None)
-    assert settings.google_api_key.get_secret_value() == "env-key"
+    assert settings.groq_api_key.get_secret_value() == "env-key"
 
 
 @pytest.mark.parametrize("key", [None, "", "   "])
 def test_missing_api_key_is_rejected(key):
-    with pytest.raises(ValidationError, match="GOOGLE_API_KEY"):
-        make_settings(google_api_key=key)
+    with pytest.raises(ValidationError, match="GROQ_API_KEY"):
+        make_settings(groq_api_key=key)
 
 
 def test_api_key_is_hidden_in_output():
-    settings = make_settings(google_api_key="super-secret")
+    settings = make_settings(groq_api_key="super-secret")
     assert "super-secret" not in repr(settings)
-    assert "super-secret" not in str(settings.google_api_key)
+    assert "super-secret" not in str(settings.groq_api_key)
+
+
+def test_models_from_comma_separated_env(monkeypatch):
+    monkeypatch.setenv("GROQ_MODELS", " model-b , model-a,, model-b ")
+    settings = Settings(_env_file=None, groq_api_key="k")
+    assert settings.available_models == ["model-b", "model-a"]  # order kept, no blanks/dupes
+    assert settings.default_model == "model-b"
+
+
+def test_empty_model_list_is_rejected():
+    with pytest.raises(ValidationError, match="GROQ_MODELS"):
+        make_settings(groq_models=[" "])
 
 
 def test_unsupported_provider_rejected():
     with pytest.raises(ValidationError):
-        make_settings(llm_provider="ollama")  # planned for v2
+        make_settings(llm_provider="ollama")  # not supported yet
 
 
 def test_chunk_overlap_must_be_smaller_than_chunk_size():
@@ -48,17 +66,17 @@ def test_allowed_extensions_are_normalized():
 
 
 def test_collection_name_includes_embedding_model():
-    assert make_settings().collection_name == "innovatech_gemini_models-gemini-embedding-001"
+    assert make_settings().collection_name == "innovatech_fastembed_baai-bge-small-en-v1-5"
 
 
 def test_collection_name_changes_with_embedding_model():
-    a = make_settings(gemini_embedding_model="models/model-a")
-    b = make_settings(gemini_embedding_model="models/model-b")
+    a = make_settings(embedding_model="org/model-a")
+    b = make_settings(embedding_model="org/model-b")
     assert a.collection_name != b.collection_name
 
 
 def test_collection_name_respects_chroma_limits():
-    settings = make_settings(gemini_embedding_model="x" * 100)
+    settings = make_settings(embedding_model="x" * 100)
     assert len(settings.collection_name) <= 63
     assert settings.collection_name[-1].isalnum()
 
@@ -76,7 +94,7 @@ def test_blank_admin_password_disables_admin(password):
 
 def test_admin_password_read_from_environment_and_hidden(monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "s3cret-admin")
-    settings = Settings(_env_file=None, google_api_key="test-key")
+    settings = Settings(_env_file=None, groq_api_key="test-key")
     assert settings.admin_enabled is True
     assert settings.admin_password.get_secret_value() == "s3cret-admin"
     assert "s3cret-admin" not in repr(settings)

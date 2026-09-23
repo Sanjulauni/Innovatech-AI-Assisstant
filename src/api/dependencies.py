@@ -12,15 +12,15 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from langchain_core.embeddings import Embeddings
-from langchain_core.language_models import BaseChatModel
 
 from src.api.auth import SESSION_COOKIE, LoginRateLimiter, SessionManager
 from src.config import Settings
 from src.data_pipeline.ingestion import IngestionService
 from src.data_pipeline.vector_store import VectorStoreRepository
-from src.model_factory import EmbeddingFactory, LLMFactory
+from src.model_factory import ChatModel, EmbeddingFactory, LLMFactory
 from src.rag_engine.instructions import InstructionsStore
 from src.rag_engine.llm_chain import RAGChain
+from src.rag_engine.model_selector import ModelSelector
 from src.rag_engine.retriever import DocumentRetriever
 
 ADMIN_HEADER = "X-Admin-Password"
@@ -33,6 +33,7 @@ class Services:
     ingestion: IngestionService
     instructions: InstructionsStore
     chain: RAGChain
+    models: ModelSelector
     sessions: SessionManager
     login_limiter: LoginRateLimiter
 
@@ -40,19 +41,24 @@ class Services:
 def build_services(
     settings: Settings,
     embeddings: Embeddings | None = None,
-    llm: BaseChatModel | None = None,
+    llm: ChatModel | None = None,
     repository: VectorStoreRepository | None = None,
 ) -> Services:
-    """Create every service from settings. Any argument given replaces the real one."""
+    """Create every service from settings. Any argument given replaces the real one.
+
+    A given ``llm`` answers for whichever model is selected (used by tests).
+    """
     repository = repository or VectorStoreRepository.from_settings(
         embeddings or EmbeddingFactory.create(settings), settings
     )
     instructions = InstructionsStore.from_settings(settings)
+    models = ModelSelector(
+        settings.available_models,
+        factory=(lambda _model: llm) if llm else (lambda model: LLMFactory.create(settings, model)),
+        store_path=settings.model_selection_file,
+    )
     chain = RAGChain.from_settings(
-        DocumentRetriever.from_settings(repository, settings),
-        llm or LLMFactory.create(settings),
-        instructions,
-        settings,
+        DocumentRetriever.from_settings(repository, settings), models, instructions, settings
     )
     return Services(
         settings=settings,
@@ -60,6 +66,7 @@ def build_services(
         ingestion=IngestionService.from_settings(repository, settings),
         instructions=instructions,
         chain=chain,
+        models=models,
         sessions=SessionManager(ttl_seconds=int(settings.admin_session_hours * 3600)),
         login_limiter=LoginRateLimiter(),
     )

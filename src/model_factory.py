@@ -1,152 +1,138 @@
-"""Factories that build the chat model and embedding model for the configured provider.
+"""Factories that build the chat model and the embedding model.
 
-The rest of the application depends only on LangChain's ``BaseChatModel`` and
-``Embeddings`` interfaces, so adding a provider (e.g. Ollama in v2) means writing
-one builder function and registering it in ``_BUILDERS`` (FR-37, NFR-16).
+The rest of the application depends only on LangChain's chat-model (``Runnable``) and
+``Embeddings`` interfaces, so adding a provider (e.g. Ollama) means writing one
+builder function and registering it (FR-37, NFR-16).
 """
 
 from __future__ import annotations
 
 import logging
-import time
+import os
+import threading
 from collections.abc import Callable
-from typing import TypeVar
+from pathlib import Path
+from typing import Any
 
 from langchain_core.embeddings import Embeddings
-from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models import BaseChatModel, LanguageModelInput
+from langchain_core.messages import BaseMessage
+from langchain_core.runnables import Runnable
 
-from src.config import ModelProvider, Settings, get_settings
+from src.config import EmbeddingProvider, ModelProvider, Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
+# Anything with invoke/stream that returns a chat message.
+ChatModel = Runnable[LanguageModelInput, BaseMessage]
 
 
 def is_rate_limited(exc: BaseException) -> bool:
     """Whether the provider rejected a call for exceeding its quota (HTTP 429)."""
     text = str(exc)
-    return "429" in text or "RESOURCE_EXHAUSTED" in text
+    return "429" in text or "RESOURCE_EXHAUSTED" in text or "rate limit" in text.lower()
 
 
-class RetryingEmbeddings(Embeddings):
-    """Wraps an embedding model: sends documents in small batches and, when the
-    provider says "too many requests", waits and retries instead of failing.
+# --- Embeddings ------------------------------------------------------------------
 
-    Free-tier quotas are per minute, so a large document (or several uploaded in a
-    row) would otherwise fail part-way even though waiting briefly fixes it.
+
+class FastEmbedEmbeddings(Embeddings):
+    """Local embeddings with FastEmbed (ONNX, CPU). No API calls and no quota.
+
+    The model is downloaded to ``cache_dir`` and loaded on first use, so starting
+    the app (and running tests) stays fast.
     """
 
-    _FIRST_DELAY = 5.0
-    _MAX_DELAY = 30.0
-    _QUERY_MAX_WAIT = 15.0  # chat questions shouldn't hang for minutes
-
-    def __init__(
-        self,
-        inner: Embeddings,
-        batch_size: int = 20,
-        max_wait_seconds: float = 120.0,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self.inner = inner
+    def __init__(self, model_name: str, cache_dir: Path, batch_size: int = 32) -> None:
+        self.model_name = model_name
+        self.cache_dir = Path(cache_dir)
         self._batch_size = batch_size
-        self._max_wait = max_wait_seconds
-        self._sleep = sleep
+        self._model: Any = None
+        self._lock = threading.Lock()
+
+    def _load(self) -> Any:
+        with self._lock:
+            if self._model is None:
+                # Windows without Developer Mode can't make symlinks; the cache still works.
+                os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+                from fastembed import TextEmbedding
+
+                logger.info("Loading embedding model %s (first use downloads it)", self.model_name)
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                self._model = TextEmbedding(self.model_name, cache_dir=str(self.cache_dir))
+            return self._model
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), self._batch_size):
-            batch = texts[start : start + self._batch_size]
-            embedded = self._retry(lambda b=batch: self.inner.embed_documents(b), self._max_wait)
-            vectors.extend(embedded)
-        return vectors
+        if not texts:
+            return []
+        model = self._load()
+        return [vector.tolist() for vector in model.embed(texts, batch_size=self._batch_size)]
 
     def embed_query(self, text: str) -> list[float]:
-        return self._retry(
-            lambda: self.inner.embed_query(text), min(self._max_wait, self._QUERY_MAX_WAIT)
-        )
-
-    def _retry(self, call: Callable[[], T], max_wait: float) -> T:
-        waited, delay = 0.0, self._FIRST_DELAY
-        while True:
-            try:
-                return call()
-            except Exception as exc:
-                if not is_rate_limited(exc) or waited + delay > max_wait:
-                    raise
-                logger.warning("Embedding quota reached; retrying in %.0fs", delay)
-                self._sleep(delay)
-                waited += delay
-                delay = min(delay * 2, self._MAX_DELAY)
+        # BGE models expect queries with a search prefix; query_embed adds it.
+        return next(iter(self._load().query_embed(text))).tolist()
 
 
-# --- Builders ----------------------------------------------------------------
+# --- Builders --------------------------------------------------------------------
 
 
-def _build_gemini_llm(settings: Settings) -> BaseChatModel:
-    from langchain_google_genai import ChatGoogleGenerativeAI
+def _build_groq_llm(settings: Settings, model: str) -> BaseChatModel:
+    from langchain_groq import ChatGroq
 
-    return ChatGoogleGenerativeAI(
-        model=settings.gemini_llm_model,
-        google_api_key=settings.google_api_key,
+    options: dict[str, Any] = {}
+    if model.startswith("qwen/"):
+        # Qwen reasoning models otherwise put their <think> notes in the answer.
+        options["reasoning_format"] = "hidden"
+    return ChatGroq(
+        model=model,
+        api_key=settings.groq_api_key,
         temperature=settings.llm_temperature,
+        max_retries=2,
+        **options,
     )
 
 
-def _build_gemini_embeddings(settings: Settings) -> Embeddings:
-    from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-    return GoogleGenerativeAIEmbeddings(
-        model=settings.gemini_embedding_model,
-        google_api_key=settings.google_api_key,
-    )
+def _build_fastembed(settings: Settings) -> Embeddings:
+    return FastEmbedEmbeddings(settings.embedding_model, settings.embedding_cache_dir)
 
 
-# --- Factories ---------------------------------------------------------------
+# --- Factories -------------------------------------------------------------------
 
 
 class LLMFactory:
-    """Creates the chat model for the configured ``LLM_PROVIDER``."""
+    """Creates a chat model for the configured ``LLM_PROVIDER``."""
 
-    _BUILDERS: dict[ModelProvider, Callable[[Settings], BaseChatModel]] = {
-        ModelProvider.GEMINI: _build_gemini_llm,
+    _BUILDERS: dict[ModelProvider, Callable[[Settings, str], ChatModel]] = {
+        ModelProvider.GROQ: _build_groq_llm,
     }
 
     @classmethod
-    def create(cls, settings: Settings | None = None) -> BaseChatModel:
+    def create(cls, settings: Settings | None = None, model: str | None = None) -> ChatModel:
         settings = settings or get_settings()
         builder = cls._BUILDERS.get(settings.llm_provider)
         if builder is None:
             raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")
-
-        logger.info(
-            "Using LLM provider=%s model=%s",
-            settings.llm_provider.value,
-            settings.llm_model_name,
-        )
-        return builder(settings)
+        model = model or settings.default_model
+        logger.info("Using LLM provider=%s model=%s", settings.llm_provider.value, model)
+        return builder(settings, model)
 
 
 class EmbeddingFactory:
-    """Creates the embedding model for the configured provider."""
+    """Creates the embedding model for the configured ``EMBEDDING_PROVIDER``."""
 
-    _BUILDERS: dict[ModelProvider, Callable[[Settings], Embeddings]] = {
-        ModelProvider.GEMINI: _build_gemini_embeddings,
+    _BUILDERS: dict[EmbeddingProvider, Callable[[Settings], Embeddings]] = {
+        EmbeddingProvider.FASTEMBED: _build_fastembed,
     }
 
     @classmethod
     def create(cls, settings: Settings | None = None) -> Embeddings:
         settings = settings or get_settings()
-        builder = cls._BUILDERS.get(settings.llm_provider)
+        builder = cls._BUILDERS.get(settings.embedding_provider)
         if builder is None:
-            raise ValueError(f"Unsupported embedding provider: {settings.llm_provider}")
-
+            raise ValueError(f"Unsupported embedding provider: {settings.embedding_provider}")
         logger.info(
             "Using embedding provider=%s model=%s",
-            settings.llm_provider.value,
+            settings.embedding_provider.value,
             settings.embedding_model_name,
         )
-        return RetryingEmbeddings(
-            builder(settings),
-            batch_size=settings.embedding_batch_size,
-            max_wait_seconds=settings.embedding_retry_seconds,
-        )
+        return builder(settings)

@@ -24,6 +24,7 @@ def settings(tmp_path):
         admin_password=PASSWORD,
         raw_data_dir=tmp_path / "raw",
         instructions_file=tmp_path / "instructions.json",
+        model_selection_file=tmp_path / "model.json",
         max_upload_size_mb=1,
         chunk_size=200,
         chunk_overlap=20,
@@ -61,9 +62,9 @@ def test_health(client):
         "status": "ok",
         "vector_store": "ok",
         "documents": 1,
-        "llm_provider": "gemini",
-        "llm_model": "gemini-3-flash-preview",
-        "embedding_model": "models/gemini-embedding-001",
+        "llm_provider": "groq",
+        "llm_model": "openai/gpt-oss-120b",
+        "embedding_model": "BAAI/bge-small-en-v1.5",
         "admin_enabled": True,
     }
 
@@ -266,12 +267,12 @@ def test_upload_requires_file(client):
 
 def test_upload_returns_503_when_embeddings_fail(client, repository, monkeypatch):
     def fail(*_args):
-        raise ConnectionError("Gemini embeddings unreachable")
+        raise ConnectionError("embedding model failed")
 
     monkeypatch.setattr(repository, "add_document", fail)
     response = upload(client)
     assert response.status_code == 503
-    assert "unreachable" not in response.json()["detail"]
+    assert "embedding model failed" not in response.json()["detail"]
 
 
 def test_upload_quota_error_has_clear_message(client, repository, monkeypatch):
@@ -349,3 +350,57 @@ def test_startup_builds_services_from_settings(settings, repository, llm, monkey
     with TestClient(create_app()) as client:
         assert client.get("/health").status_code == 200
     assert built == [settings]
+
+
+# --- Model choice ---------------------------------------------------------------------
+
+
+def test_get_models(client):
+    body = client.get("/admin/model", headers=ADMIN).json()
+    assert body["current"] == "openai/gpt-oss-120b"
+    assert [o["id"] for o in body["options"]] == [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+    ]
+    assert body["options"][1]["label"] == "GPT-OSS 20B"
+
+
+def test_select_model_updates_health(client):
+    response = client.put("/admin/model", json={"model": "qwen/qwen3.8-27b"}, headers=ADMIN)
+    assert response.status_code == 200
+    assert response.json()["current"] == "qwen/qwen3.8-27b"
+    assert client.get("/health").json()["llm_model"] == "qwen/qwen3.8-27b"
+
+
+def test_select_unknown_model_is_rejected(client):
+    response = client.put("/admin/model", json={"model": "llama-3.3-70b"}, headers=ADMIN)
+    assert response.status_code == 422
+    assert "not one of the available models" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(("method", "body"), [("get", None), ("put", {"model": "x"})])
+def test_model_endpoints_need_admin(client, method, body):
+    assert client.request(method, "/admin/model", json=body).status_code == 401
+
+
+# --- Re-index ----------------------------------------------------------------------------
+
+
+def test_reindex_indexes_saved_files_and_skips_indexed_ones(client, settings, repository):
+    upload(client, "indexed.txt", b"Already indexed.")
+    settings.raw_data_dir.mkdir(exist_ok=True)
+    (settings.raw_data_dir / "dropped-in.md").write_text("# New policy", encoding="utf-8")
+    (settings.raw_data_dir / "bad.xyz").write_text("nope", encoding="utf-8")
+
+    response = client.post("/admin/documents/reindex", headers=ADMIN)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["indexed"], body["skipped"]) == (1, 1)
+    assert set(body["failed"]) == {"bad.xyz"}
+    assert {d.source for d in repository.list_documents()} == {"indexed.txt", "dropped-in.md"}
+
+
+def test_reindex_needs_admin(client):
+    assert client.post("/admin/documents/reindex").status_code == 401

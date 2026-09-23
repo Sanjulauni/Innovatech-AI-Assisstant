@@ -86,6 +86,27 @@ class UploadResponse(BaseModel):
     message: str
 
 
+class ReindexResponse(BaseModel):
+    indexed: int = Field(description="Files newly indexed.")
+    skipped: int = Field(description="Files that were already indexed.")
+    failed: dict[str, str] = Field(description="File name -> reason it could not be indexed.")
+
+
+class ModelOptionOut(BaseModel):
+    id: str
+    label: str
+    description: str
+
+
+class ModelsOut(BaseModel):
+    current: str
+    options: list[ModelOptionOut]
+
+
+class ModelSelectIn(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
 class InstructionsIn(BaseModel):
     text: str = Field(max_length=MAX_INSTRUCTIONS_LENGTH)
 

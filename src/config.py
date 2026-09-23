@@ -3,7 +3,9 @@
 All tunable values are read from environment variables or a local ``.env`` file
 (see ``.env.example``). Nothing configurable should be hard-coded elsewhere (NFR-15).
 
-Version 1 supports a single model provider: the Google Gemini API (FR-34).
+Chat answers come from the Groq API (free tier); the admin picks which of the
+``GROQ_MODELS`` to use. Document embeddings are computed locally with FastEmbed,
+so indexing and search need no API and no quota.
 """
 
 from __future__ import annotations
@@ -12,17 +14,24 @@ import re
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class ModelProvider(str, Enum):
-    """Supported model providers. Add new ones (e.g. OLLAMA) here in later versions."""
+    """Chat model providers. Add new ones (e.g. OLLAMA) here in later versions."""
 
-    GEMINI = "gemini"
+    GROQ = "groq"
+
+
+class EmbeddingProvider(str, Enum):
+    """Embedding providers. FastEmbed runs locally on the CPU."""
+
+    FASTEMBED = "fastembed"
 
 
 _ENV_CONFIG = SettingsConfigDict(
@@ -31,6 +40,15 @@ _ENV_CONFIG = SettingsConfigDict(
     case_sensitive=False,
     env_ignore_empty=True,  # `KEY=` in .env counts as "not set"
     extra="ignore",
+)
+
+_PATH_FIELDS = (
+    "raw_data_dir",
+    "vector_db_dir",
+    "instructions_file",
+    "model_selection_file",
+    "embedding_cache_dir",
+    "frontend_dist_dir",
 )
 
 
@@ -43,30 +61,36 @@ class Settings(BaseSettings):
     app_name: str = "InnovaTech AI Assistant"
     log_level: str = "INFO"
 
-    # --- Model provider ----------------------------------------------------
-    llm_provider: ModelProvider = ModelProvider.GEMINI
+    # --- Chat model (Groq) -------------------------------------------------
+    llm_provider: ModelProvider = ModelProvider.GROQ
     llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    groq_api_key: SecretStr | None = None
+    # Models the admin can choose from (comma-separated in .env). The first is the default.
+    groq_models: Annotated[list[str], NoDecode] = [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+    ]
 
-    # --- Gemini API --------------------------------------------------------
-    google_api_key: SecretStr | None = None
-    gemini_llm_model: str = "gemini-3-flash-preview"
-    gemini_embedding_model: str = "models/gemini-embedding-001"
+    # --- Embeddings (local) ------------------------------------------------
+    embedding_provider: EmbeddingProvider = EmbeddingProvider.FASTEMBED
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    # Where the embedding model is downloaded to on first use (~70 MB).
+    embedding_cache_dir: Path = PROJECT_ROOT / "data" / "models"
 
     # --- Data & vector store -----------------------------------------------
     raw_data_dir: Path = PROJECT_ROOT / "data" / "raw"
     vector_db_dir: Path = PROJECT_ROOT / "data" / "vector_db"
     collection_prefix: str = "innovatech"
     instructions_file: Path = PROJECT_ROOT / "data" / "agent_instructions.json"
+    # The chat model the admin selected.
+    model_selection_file: Path = PROJECT_ROOT / "data" / "model_selection.json"
 
     # --- Ingestion ---------------------------------------------------------
     chunk_size: int = Field(default=1000, gt=0)
     chunk_overlap: int = Field(default=200, ge=0)
     allowed_extensions: set[str] = {".pdf", ".docx", ".txt", ".md"}
     max_upload_size_mb: int = Field(default=20, gt=0)
-    # Chunks sent to the embedding API per request, and how long to keep retrying when
-    # the provider's per-minute quota is reached (free tier) before giving up.
-    embedding_batch_size: int = Field(default=20, gt=0, le=100)
-    embedding_retry_seconds: float = Field(default=120, ge=0)
 
     # --- Retrieval ---------------------------------------------------------
     retriever_top_k: int = Field(default=4, gt=0)
@@ -85,15 +109,27 @@ class Settings(BaseSettings):
     # How long an admin stays logged in to the web app.
     admin_session_hours: float = Field(default=8, gt=0)
 
+    @field_validator("groq_models", mode="before")
+    @classmethod
+    def _split_models(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",")]
+        return value
+
     @model_validator(mode="after")
     def _validate(self) -> Settings:
-        if self.llm_provider is ModelProvider.GEMINI and not (
-            self.google_api_key and self.google_api_key.get_secret_value().strip()
+        if self.llm_provider is ModelProvider.GROQ and not (
+            self.groq_api_key and self.groq_api_key.get_secret_value().strip()
         ):
             raise ValueError(
-                "GOOGLE_API_KEY is not set. Add it to your .env file "
-                "(get a key at https://aistudio.google.com/apikey)."
+                "GROQ_API_KEY is not set. Add it to your .env file "
+                "(get a free key at https://console.groq.com/keys)."
             )
+
+        # Drop blanks and duplicates, keeping the order (the first model is the default).
+        self.groq_models = list(dict.fromkeys(m.strip() for m in self.groq_models if m.strip()))
+        if not self.groq_models:
+            raise ValueError("GROQ_MODELS must list at least one model.")
 
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
@@ -102,7 +138,7 @@ class Settings(BaseSettings):
             self.admin_password = None
 
         # Relative paths in .env are relative to the project root, not the working directory.
-        for field in ("raw_data_dir", "vector_db_dir", "instructions_file", "frontend_dist_dir"):
+        for field in _PATH_FIELDS:
             path = getattr(self, field)
             if not path.is_absolute():
                 setattr(self, field, PROJECT_ROOT / path)
@@ -123,29 +159,32 @@ class Settings(BaseSettings):
         return self.max_upload_size_mb * 1024 * 1024
 
     @property
-    def llm_model_name(self) -> str:
-        """Model name for the active LLM provider."""
-        return self.gemini_llm_model
+    def available_models(self) -> list[str]:
+        """Chat models the admin can choose from."""
+        return list(self.groq_models)
+
+    @property
+    def default_model(self) -> str:
+        return self.groq_models[0]
 
     @property
     def embedding_model_name(self) -> str:
-        """Model name for the active embedding provider."""
-        return self.gemini_embedding_model
+        return self.embedding_model
 
     @property
     def collection_name(self) -> str:
-        """ChromaDB collection name, unique per provider and embedding model (FR-36).
+        """ChromaDB collection name, unique per embedding provider and model (FR-36).
 
         Different embedding models produce incompatible vectors, so each gets its
-        own collection. Changing the model then just requires re-ingesting.
+        own collection. Changing the model then just requires re-indexing.
         """
         slug = re.sub(r"[^a-z0-9]+", "-", self.embedding_model_name.lower()).strip("-")
-        name = f"{self.collection_prefix}_{self.llm_provider.value}_{slug}"
+        name = f"{self.collection_prefix}_{self.embedding_provider.value}_{slug}"
         return name[:63].rstrip("-_")  # ChromaDB: max 63 chars, must end alphanumeric
 
 
 class UISettings(BaseSettings):
-    """The few settings the Streamlit UI needs. It never needs the Gemini key."""
+    """The few settings the Streamlit UI needs. It never needs an API key."""
 
     model_config = _ENV_CONFIG
 

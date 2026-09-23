@@ -24,6 +24,7 @@ def settings(tmp_path):
         admin_password=PASSWORD,
         raw_data_dir=tmp_path / "raw",
         instructions_file=tmp_path / "instructions.json",
+        model_selection_file=tmp_path / "model.json",
         frontend_dist_dir=tmp_path / "dist",
     )
 

@@ -4,8 +4,9 @@ langchain-text-splitters>=0.3
 langchain-chroma>=0.2
 chromadb>=1.0
 
-# --- LLM provider (v1: Gemini only) ---
-langchain-google-genai>=2.1
+# --- Chat model (Groq) and local embeddings ---
+langchain-groq>=1.1
+fastembed>=0.8
 
 # --- Document loaders ---
 pypdf>=5.0

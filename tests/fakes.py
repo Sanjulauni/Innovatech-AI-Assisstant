@@ -1,4 +1,4 @@
-"""Fake models used in tests, so no Gemini calls are made."""
+"""Fake models used in tests, so no real model or API is ever called."""
 
 from typing import Any
 
@@ -22,10 +22,10 @@ class RecordingChatModel(FakeListChatModel):
 
 class BrokenChatModel(FakeListChatModel):
     def _call(self, *args, **kwargs):
-        raise ConnectionError("Gemini unreachable")
+        raise ConnectionError("Groq unreachable")
 
     def _stream(self, *args, **kwargs):
-        raise ConnectionError("Gemini unreachable")
+        raise ConnectionError("Groq unreachable")
         yield  # pragma: no cover  (makes this a generator)
 
 
