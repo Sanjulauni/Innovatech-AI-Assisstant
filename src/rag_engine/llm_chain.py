@@ -173,9 +173,18 @@ def _llm_error(exc: Exception) -> ServiceUnavailableError:
         return ServiceUnavailableError(
             "The AI model is busy (usage limit reached). Please wait a minute and try again."
         )
+    if _is_overloaded(exc):
+        return ServiceUnavailableError(
+            "The AI model is overloaded right now (high demand). Please try again in a minute."
+        )
     return ServiceUnavailableError(
         "The AI model is unavailable right now. Please try again shortly."
     )
+
+
+def _is_overloaded(exc: Exception) -> bool:
+    text = str(exc)
+    return "503" in text or "UNAVAILABLE" in text or "overloaded" in text.lower()
 
 
 def is_not_found(answer: str) -> bool:

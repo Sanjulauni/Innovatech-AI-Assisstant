@@ -20,7 +20,12 @@ from src.rag_engine.prompts import (
 )
 from src.rag_engine.retriever import DocumentRetriever, build_search_query
 from tests.conftest import make_settings
-from tests.fakes import BrokenChatModel, RateLimitedChatModel, RecordingChatModel
+from tests.fakes import (
+    BrokenChatModel,
+    OverloadedChatModel,
+    RateLimitedChatModel,
+    RecordingChatModel,
+)
 
 
 def add_doc(repository, doc_id, source, *texts, page=None):
@@ -269,6 +274,14 @@ def test_rate_limit_has_its_own_message(repository):
     chain = RAGChain(DocumentRetriever(repository, 2), RateLimitedChatModel(responses=["x"]))
 
     with pytest.raises(ServiceUnavailableError, match="usage limit reached"):
+        chain.ask("text")
+
+
+def test_overloaded_model_has_its_own_message(repository):
+    add_doc(repository, "doc-a", "a.txt", "text")
+    chain = RAGChain(DocumentRetriever(repository, 2), OverloadedChatModel(responses=["x"]))
+
+    with pytest.raises(ServiceUnavailableError, match="overloaded right now"):
         chain.ask("text")
 
 

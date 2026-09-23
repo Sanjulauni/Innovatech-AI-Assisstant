@@ -40,3 +40,8 @@ class MidStreamFailureChatModel(FakeListChatModel):
     def _stream(self, *args, **kwargs):
         yield from list(super()._stream(*args, **kwargs))[:3]
         raise ConnectionError("connection reset")
+
+
+class OverloadedChatModel(FakeListChatModel):
+    def _call(self, *args, **kwargs):
+        raise RuntimeError("503 UNAVAILABLE: This model is currently experiencing high demand.")
