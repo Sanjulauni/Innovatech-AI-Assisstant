@@ -59,6 +59,20 @@ describe("ChatPage", () => {
     expect(screen.getByText(SOURCE.snippet)).toBeInTheDocument();
   });
 
+  it("makes full-width citations clickable while streaming", async () => {
+    // The stream ends without a "done" event, so only the raw text is shown.
+    mockApi({
+      "POST /chat/stream": () =>
+        streamResponse(ndjson({ type: "token", text: "The company is Creative Commons 【1】" })),
+    });
+    renderApp();
+
+    await ask("Which company?");
+
+    expect(await screen.findByRole("button", { name: "Show source 1" })).toBeInTheDocument();
+    expect(screen.queryByText(/【/)).not.toBeInTheDocument();
+  });
+
   it("sends earlier turns as history", async () => {
     const fetchMock = mockApi({ "POST /chat/stream": () => answerStream() });
     renderApp();

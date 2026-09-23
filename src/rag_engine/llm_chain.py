@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 _SNIPPET_LENGTH = 300
 _CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# Some models (e.g. GPT-OSS) cite with full-width brackets (U+3010/U+3011), such as
+# "【1】", "【1, 2】" or "【1†source】". The comma may be full-width too (U+FF0C).
+_WIDE_CITATION = re.compile(r"【\s*(\d+(?:\s*[,，]\s*\d+)*)[^】]*】")
+_COMMA = re.compile(r"\s*[,，]\s*")
+
+
+def normalize_citations(text: str) -> str:
+    """Rewrite full-width citation markers as [1] / [1, 2]."""
+    return _WIDE_CITATION.sub(lambda m: "[" + ", ".join(_COMMA.split(m.group(1))) + "]", text)
 
 
 class RAGError(Exception):
@@ -124,7 +133,7 @@ class RAGChain:
         return build_messages(question, results, history, admin_instructions)
 
     def _finish(self, text: str, results: list[SearchResult]) -> Answer:
-        text = text.strip() or NOT_FOUND_MESSAGE
+        text = normalize_citations(text).strip() or NOT_FOUND_MESSAGE
         return Answer(answer=text, sources=self._select_sources(text, results))
 
     def _current_llm(self) -> ChatModel:

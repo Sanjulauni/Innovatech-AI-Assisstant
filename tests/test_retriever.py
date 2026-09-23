@@ -9,7 +9,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.data_pipeline.vector_store import SearchResult
 from src.rag_engine.instructions import InstructionsStore
-from src.rag_engine.llm_chain import RAGChain, ServiceUnavailableError, is_not_found
+from src.rag_engine.llm_chain import (
+    RAGChain,
+    ServiceUnavailableError,
+    is_not_found,
+    normalize_citations,
+)
 from src.rag_engine.models import ChatMessage
 from src.rag_engine.prompts import (
     NOT_FOUND_MESSAGE,
@@ -372,3 +377,43 @@ def test_stream_rejects_blank_question(repository):
     chain, _ = make_chain(repository, ["x"])
     with pytest.raises(ValueError):
         next(chain.stream("  "))
+
+
+# --- Full-width citations (e.g. GPT-OSS) -------------------------------------------
+
+L, R = "\u3010", "\u3011"  # the brackets in 【1】
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f"X {L}1{R}{L}2{R}", "X [1][2]"),
+        (f"See {L}1, 3{R}", "See [1, 3]"),
+        (f"Wide comma {L}1\uff0c2{R}", "Wide comma [1, 2]"),
+        (f"Source note {L}4\u2020L1-L5{R}", "Source note [4]"),
+        (f"Plain [1] and {L}note{R}", f"Plain [1] and {L}note{R}"),
+    ],
+)
+def test_normalize_citations(text, expected):
+    assert normalize_citations(text) == expected
+
+
+def test_full_width_citations_select_only_cited_sources(repository):
+    add_doc(repository, "doc-a", "a.txt", "first chunk", "second chunk", "third chunk")
+    reply = f"The company is **Creative Commons** {L}1{R} {L}3{R}"
+    chain, _ = make_chain(repository, [reply], top_k=3)
+
+    answer = chain.ask("first chunk")
+
+    assert answer.answer == "The company is **Creative Commons** [1] [3]"
+    assert [s.index for s in answer.sources] == [1, 3]
+
+
+def test_streamed_answer_is_normalized_in_final_event(repository):
+    add_doc(repository, "doc-a", "a.txt", "first chunk")
+    chain, _ = make_chain(repository, [f"Yes {L}1{R}."])
+
+    *_, answer = list(chain.stream("first chunk"))
+
+    assert answer.answer == "Yes [1]."
+    assert [s.index for s in answer.sources] == [1]
