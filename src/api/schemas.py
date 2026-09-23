@@ -62,8 +62,13 @@ class HealthResponse(BaseModel):
 # --- Admin ---------------------------------------------------------------------
 
 
+class LoginRequest(BaseModel):
+    password: str | None = Field(default=None, max_length=512)
+
+
 class LoginResponse(BaseModel):
     authenticated: bool
+    expires_in: int | None = Field(default=None, description="Session lifetime in seconds.")
 
 
 class DocumentOut(BaseModel):

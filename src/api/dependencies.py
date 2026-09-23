@@ -14,6 +14,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 
+from src.api.auth import SESSION_COOKIE, LoginRateLimiter, SessionManager
 from src.config import Settings
 from src.data_pipeline.ingestion import IngestionService
 from src.data_pipeline.vector_store import VectorStoreRepository
@@ -32,6 +33,8 @@ class Services:
     ingestion: IngestionService
     instructions: InstructionsStore
     chain: RAGChain
+    sessions: SessionManager
+    login_limiter: LoginRateLimiter
 
 
 def build_services(
@@ -57,6 +60,8 @@ def build_services(
         ingestion=IngestionService.from_settings(repository, settings),
         instructions=instructions,
         chain=chain,
+        sessions=SessionManager(ttl_seconds=int(settings.admin_session_hours * 3600)),
+        login_limiter=LoginRateLimiter(),
     )
 
 
@@ -65,21 +70,34 @@ def get_services(request: Request) -> Services:
 
 
 ServicesDep = Annotated[Services, Depends(get_services)]
+AdminPasswordHeader = Annotated[str | None, Header(alias=ADMIN_HEADER)]
 
 
-def require_admin(
-    services: ServicesDep,
-    x_admin_password: Annotated[str | None, Header(alias=ADMIN_HEADER)] = None,
-) -> None:
-    """Allow the request only if it carries the correct admin password."""
-    expected = services.settings.admin_password
-    if expected is None:
+def ensure_admin_enabled(services: Services) -> None:
+    if not services.settings.admin_enabled:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Admin access is disabled. Set ADMIN_PASSWORD in the server's .env file.",
         )
-    # Constant-time comparison, so response timing reveals nothing about the password.
-    if x_admin_password is None or not secrets.compare_digest(
-        x_admin_password.encode("utf-8"), expected.get_secret_value().encode("utf-8")
-    ):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect admin password.")
+
+
+def password_matches(services: Services, password: str | None) -> bool:
+    """Constant-time check, so response timing reveals nothing about the password."""
+    expected = services.settings.admin_password
+    if expected is None or password is None:
+        return False
+    return secrets.compare_digest(
+        password.encode("utf-8"), expected.get_secret_value().encode("utf-8")
+    )
+
+
+def require_admin(
+    request: Request, services: ServicesDep, x_admin_password: AdminPasswordHeader = None
+) -> None:
+    """Allow the request with a valid session cookie (web app) or password header."""
+    ensure_admin_enabled(services)
+    if services.sessions.verify(request.cookies.get(SESSION_COOKIE)):
+        return
+    if password_matches(services, x_admin_password):
+        return
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect admin password.")

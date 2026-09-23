@@ -15,12 +15,28 @@ class RecordingChatModel(FakeListChatModel):
         self.prompts.append(messages)
         return super()._call(messages, *args, **kwargs)
 
+    def _stream(self, messages, *args, **kwargs):
+        self.prompts.append(messages)
+        yield from super()._stream(messages, *args, **kwargs)
+
 
 class BrokenChatModel(FakeListChatModel):
     def _call(self, *args, **kwargs):
         raise ConnectionError("Gemini unreachable")
 
+    def _stream(self, *args, **kwargs):
+        raise ConnectionError("Gemini unreachable")
+        yield  # pragma: no cover  (makes this a generator)
+
 
 class RateLimitedChatModel(FakeListChatModel):
     def _call(self, *args, **kwargs):
         raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")
+
+
+class MidStreamFailureChatModel(FakeListChatModel):
+    """Streams a few pieces of text, then loses the connection."""
+
+    def _stream(self, *args, **kwargs):
+        yield from list(super()._stream(*args, **kwargs))[:3]
+        raise ConnectionError("connection reset")

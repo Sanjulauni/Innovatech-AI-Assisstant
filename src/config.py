@@ -72,10 +72,14 @@ class Settings(BaseSettings):
     # --- API ---------------------------------------------------------------
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    # Built React app (``npm run build`` in frontend/). Served by the API if it exists.
+    frontend_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
 
     # --- Access control ----------------------------------------------------
     # Password for the admin endpoints and page. Admin features are disabled if unset.
     admin_password: SecretStr | None = None
+    # How long an admin stays logged in to the web app.
+    admin_session_hours: float = Field(default=8, gt=0)
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:
@@ -94,7 +98,7 @@ class Settings(BaseSettings):
             self.admin_password = None
 
         # Relative paths in .env are relative to the project root, not the working directory.
-        for field in ("raw_data_dir", "vector_db_dir", "instructions_file"):
+        for field in ("raw_data_dir", "vector_db_dir", "instructions_file", "frontend_dist_dir"):
             path = getattr(self, field)
             if not path.is_absolute():
                 setattr(self, field, PROJECT_ROOT / path)

@@ -290,3 +290,72 @@ def test_chain_from_settings(repository):
         settings=make_settings(chat_history_limit=3),
     )
     assert chain._history_limit == 3
+
+
+# --- Streaming -----------------------------------------------------------------
+
+
+def collect(stream):
+    items = list(stream)
+    *pieces, answer = items
+    return pieces, answer
+
+
+def test_stream_yields_pieces_then_answer_with_sources(repository):
+    add_doc(repository, "doc-a", "a.txt", "Leave is 14 days.")
+    chain, llm = make_chain(repository, ["Leave is 14 days [1]."])
+
+    pieces, answer = collect(chain.stream("Leave is 14 days."))
+
+    assert len(pieces) > 1  # streamed, not one block
+    assert all(isinstance(p, str) for p in pieces)
+    assert "".join(pieces) == "Leave is 14 days [1]."
+    assert answer.answer == "Leave is 14 days [1]."
+    assert [s.source for s in answer.sources] == ["a.txt"]
+    assert len(llm.prompts) == 1
+
+
+def test_stream_empty_knowledge_base(repository):
+    chain, llm = make_chain(repository, ["unused"])
+
+    pieces, answer = collect(chain.stream("Anything?"))
+
+    assert pieces == [NOT_FOUND_MESSAGE]
+    assert answer.answer == NOT_FOUND_MESSAGE and answer.sources == []
+    assert llm.prompts == []
+
+
+def test_stream_blank_reply_becomes_not_found(repository):
+    add_doc(repository, "doc-a", "a.txt", "text")
+    chain, _ = make_chain(repository, [" "])
+
+    pieces, answer = collect(chain.stream("text"))
+
+    assert pieces[-1] == NOT_FOUND_MESSAGE
+    assert answer.answer == NOT_FOUND_MESSAGE
+
+
+def test_stream_raises_retrieval_errors_on_first_next(repository, monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise ConnectionError("embedding API down")
+
+    monkeypatch.setattr(repository, "search", fail)
+    chain, _ = make_chain(repository, ["x"])
+    stream = chain.stream("anything")
+
+    with pytest.raises(ServiceUnavailableError, match="document search"):
+        next(stream)
+
+
+def test_stream_llm_failure_raises_service_unavailable(repository):
+    add_doc(repository, "doc-a", "a.txt", "text")
+    chain = RAGChain(DocumentRetriever(repository, 2), BrokenChatModel(responses=["x"]))
+
+    with pytest.raises(ServiceUnavailableError, match="AI model is unavailable"):
+        list(chain.stream("text"))
+
+
+def test_stream_rejects_blank_question(repository):
+    chain, _ = make_chain(repository, ["x"])
+    with pytest.raises(ValueError):
+        next(chain.stream("  "))

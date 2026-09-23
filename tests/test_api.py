@@ -80,7 +80,8 @@ def test_health_reports_vector_store_error(client, repository, monkeypatch):
 def test_openapi_docs_available(client):
     assert client.get("/docs").status_code == 200
     paths = client.get("/openapi.json").json()["paths"]
-    assert {"/chat", "/health", "/admin/login", "/admin/documents"} <= set(paths)
+    assert {"/api/chat", "/api/chat/stream", "/api/health", "/api/admin/login"} <= set(paths)
+    assert "/chat" not in paths  # legacy Streamlit paths are hidden
 
 
 # --- Chat ------------------------------------------------------------------------
@@ -176,7 +177,7 @@ ADMIN_REQUESTS = [
 def test_login_with_correct_password(client):
     response = client.post("/admin/login", headers=ADMIN)
     assert response.status_code == 200
-    assert response.json() == {"authenticated": True}
+    assert response.json() == {"authenticated": True, "expires_in": 8 * 3600}
 
 
 @pytest.mark.parametrize(("method", "path"), ADMIN_REQUESTS)
@@ -278,7 +279,7 @@ def test_delete_unknown_document_returns_404(client):
 
 
 def test_delete_rejects_malformed_id(client):
-    assert client.delete("/admin/documents/../../etc", headers=ADMIN).status_code in (404, 422)
+    assert client.delete("/admin/documents/../../etc", headers=ADMIN).status_code in (404, 405, 422)
     assert client.delete("/admin/documents/not-a-hash", headers=ADMIN).status_code == 422
 
 

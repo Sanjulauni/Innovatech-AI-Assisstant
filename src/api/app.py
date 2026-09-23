@@ -1,6 +1,10 @@
 """FastAPI application (FR-25: Swagger docs at ``/docs``).
 
 Run with ``uvicorn src.api.app:app`` or ``python -m src.api.app``.
+
+The endpoints are served twice: under ``/api`` for the React web app, and at the
+root for the Streamlit UI (until it is retired). If the React app has been built
+(``frontend/dist``), it is served too, so one server hosts everything.
 """
 
 from __future__ import annotations
@@ -9,14 +13,17 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse, JSONResponse
 
-from src.api.dependencies import Services, build_services
-from src.api.routes import admin_router, public_router
+from src.api.dependencies import Services, ServicesDep, build_services
+from src.api.routes import admin_router, auth_router, public_router
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+API_PREFIX = "/api"
+_ROUTERS = (public_router, auth_router, admin_router)
 
 
 def create_app(services: Services | None = None) -> FastAPI:
@@ -35,12 +42,15 @@ def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(
         title="InnovaTech AI Assistant API",
         description="Answers employee questions from company documents, with citations.",
-        version="1.0.0",
+        version="1.1.0",
         lifespan=lifespan,
     )
     app.state.services = services
-    app.include_router(public_router)
-    app.include_router(admin_router)
+    for router in _ROUTERS:
+        app.include_router(router, prefix=API_PREFIX)
+    for router in _ROUTERS:
+        # Legacy paths used by the Streamlit UI; hidden from the docs.
+        app.include_router(router, include_in_schema=False)
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
@@ -50,6 +60,18 @@ def create_app(services: Services | None = None) -> FastAPI:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Something went wrong on the server. Please try again."},
         )
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def web_app(path: str, services: ServicesDep) -> FileResponse:
+        """Serve the built React app; unknown paths get index.html (client-side routing)."""
+        dist = services.settings.frontend_dist_dir.resolve()
+        index = dist / "index.html"
+        if path.startswith("api/") or not index.is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+        file = (dist / path).resolve()
+        if path and file.is_file() and file.is_relative_to(dist):
+            return FileResponse(file)
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
     return app
 
