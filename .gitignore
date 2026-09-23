@@ -24,6 +24,7 @@ data/vector_db/*
 # Testing & Coverage
 .pytest_cache/
 coverage/
+.coverage
 
 # Runtime data written by the app
 data/agent_instructions.json
