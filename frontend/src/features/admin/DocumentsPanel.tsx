@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
   CheckCircle2,
+  RefreshCw,
   CircleAlert,
   CopyCheck,
   FileText,
@@ -13,8 +14,14 @@ import {
 import { useRef, useState, type DragEvent } from "react";
 
 import { Alert, Button, Card, Spinner } from "../../components/ui";
-import { ApiError, deleteDocument, listDocuments, uploadDocument } from "../../lib/api";
-import type { StoredDocument } from "../../lib/types";
+import {
+  ApiError,
+  deleteDocument,
+  listDocuments,
+  reindexDocuments,
+  uploadDocument,
+} from "../../lib/api";
+import type { ReindexResult, StoredDocument } from "../../lib/types";
 import { DOCUMENTS_KEY } from "./session";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".txt", ".md"];
@@ -166,6 +173,63 @@ function DocumentRow({ document }: { document: StoredDocument }) {
   );
 }
 
+function reindexSummary(result: ReindexResult) {
+  const failed = Object.keys(result.failed).length;
+  const parts = [
+    `${result.indexed} file${result.indexed === 1 ? "" : "s"} indexed`,
+    `${result.skipped} already indexed`,
+  ];
+  if (failed) parts.push(`${failed} could not be read`);
+  return parts.join(", ") + ".";
+}
+
+function ReindexButton() {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: reindexDocuments,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY }),
+  });
+
+  return (
+    <div className="px-4 pb-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={mutation.isPending}
+          onClick={() => mutation.mutate()}
+          icon={<RefreshCw className="size-3.5" />}
+        >
+          Re-index saved files
+        </Button>
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          Adds files saved on the server that aren&apos;t searchable yet (e.g. after the embedding
+          model changed).
+        </span>
+      </div>
+      {mutation.isSuccess && (
+        <div className="mt-2">
+          <Alert tone={Object.keys(mutation.data.failed).length ? "info" : "success"}>
+            {reindexSummary(mutation.data)}
+            {Object.entries(mutation.data.failed).map(([name, reason]) => (
+              <span key={name} className="mt-1 block text-xs">
+                {name}: {reason}
+              </span>
+            ))}
+          </Alert>
+        </div>
+      )}
+      {mutation.error && (
+        <div className="mt-2">
+          <Alert tone="error">
+            {mutation.error instanceof ApiError ? mutation.error.message : "Re-indexing failed."}
+          </Alert>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DocumentsPanel() {
   const queryClient = useQueryClient();
   const documents = useQuery({ queryKey: DOCUMENTS_KEY, queryFn: listDocuments });
@@ -250,6 +314,10 @@ export function DocumentsPanel() {
               />
             </label>
           )}
+        </div>
+
+        <div className="border-b border-slate-200 pt-3 dark:border-slate-800">
+          <ReindexButton />
         </div>
 
         {documents.isPending ? (

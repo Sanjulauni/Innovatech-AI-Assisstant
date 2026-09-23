@@ -41,9 +41,9 @@ export const HEALTH = {
   status: "ok",
   vector_store: "ok",
   documents: 2,
-  llm_provider: "gemini",
-  llm_model: "gemini-3-flash-preview",
-  embedding_model: "models/gemini-embedding-001",
+  llm_provider: "groq",
+  llm_model: "openai/gpt-oss-120b",
+  embedding_model: "BAAI/bge-small-en-v1.5",
   admin_enabled: true,
 };
 

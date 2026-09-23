@@ -220,3 +220,86 @@ describe("Instructions", () => {
     expect(editor).toHaveValue("Be concise.");
   });
 });
+
+const MODELS = {
+  current: "openai/gpt-oss-120b",
+  options: [
+    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", description: "Best answer quality." },
+    { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B", description: "Fastest." },
+    { id: "qwen/qwen3.8-27b", label: "Qwen 3.8 27B", description: "Strong reasoning." },
+  ],
+};
+
+describe("Model", () => {
+  it("shows the models with the current one selected, and switches", async () => {
+    let current = MODELS.current;
+    const fetchMock = loggedIn([], {
+      "GET /admin/model": () => jsonResponse({ ...MODELS, current }),
+      "PUT /admin/model": (_url: string, init: RequestInit) => {
+        current = JSON.parse(init.body as string).model;
+        return jsonResponse({ ...MODELS, current });
+      },
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("tab", { name: /model/i }));
+    const group = await screen.findByRole("radiogroup", { name: "Chat model" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios).toHaveLength(3);
+    expect(within(group).getByRole("radio", { name: /GPT-OSS 120B/ })).toHaveAttribute("aria-checked", "true");
+
+    await user.click(within(group).getByRole("radio", { name: /Qwen 3.8 27B/ }));
+
+    expect(await screen.findByText("Now answering with Qwen 3.8 27B.")).toBeInTheDocument();
+    expect(within(group).getByRole("radio", { name: /Qwen 3.8 27B/ })).toHaveAttribute("aria-checked", "true");
+    expect(callsTo(fetchMock, "PUT", "/admin/model")).toEqual([{ model: "qwen/qwen3.8-27b" }]);
+  });
+
+  it("clicking the current model does nothing", async () => {
+    const fetchMock = loggedIn([], { "GET /admin/model": () => jsonResponse(MODELS) });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("tab", { name: /model/i }));
+    await user.click(await screen.findByRole("radio", { name: /GPT-OSS 120B/ }));
+
+    expect(callsTo(fetchMock, "PUT", "/admin/model")).toHaveLength(0);
+  });
+
+  it("shows why a switch failed", async () => {
+    loggedIn([], {
+      "GET /admin/model": () => jsonResponse(MODELS),
+      "PUT /admin/model": () =>
+        jsonResponse({ detail: "'x' is not one of the available models." }, 422),
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("tab", { name: /model/i }));
+    await user.click(await screen.findByRole("radio", { name: /GPT-OSS 20B/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("not one of the available models");
+  });
+});
+
+describe("Re-index", () => {
+  it("re-indexes saved files and reports the result", async () => {
+    const documents: (typeof DOC)[] = [];
+    const fetchMock = loggedIn(documents, {
+      "POST /admin/documents/reindex": () => {
+        documents.push(DOC);
+        return jsonResponse({ indexed: 1, skipped: 2, failed: { "notes.xyz": "Not supported." } });
+      },
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: /re-index saved files/i }));
+
+    expect(await screen.findByText(/1 file indexed, 2 already indexed, 1 could not be read/)).toBeInTheDocument();
+    expect(screen.getByText("notes.xyz: Not supported.")).toBeInTheDocument();
+    expect(await screen.findByText("Leave_Policy.txt")).toBeInTheDocument();
+    expect(callsTo(fetchMock, "POST", "/admin/documents/reindex")).toHaveLength(1);
+  });
+});

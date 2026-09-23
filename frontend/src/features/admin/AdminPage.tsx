@@ -1,21 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { FolderOpen, LogOut, MessageSquareText } from "lucide-react";
-import { useState } from "react";
+import { Cpu, FolderOpen, LogOut, MessageSquareText } from "lucide-react";
+import { useState, type ComponentType } from "react";
 
 import { Alert, Button, Spinner } from "../../components/ui";
 import { ApiError, checkSession, getHealth, logout } from "../../lib/api";
 import { DocumentsPanel } from "./DocumentsPanel";
 import { InstructionsPanel } from "./InstructionsPanel";
 import { LoginForm } from "./LoginForm";
-import { DOCUMENTS_KEY, INSTRUCTIONS_KEY, SESSION_KEY } from "./session";
+import { ModelPanel } from "./ModelPanel";
+import { DOCUMENTS_KEY, INSTRUCTIONS_KEY, MODELS_KEY, SESSION_KEY } from "./session";
 
-type Tab = "documents" | "instructions";
+type Tab = "documents" | "instructions" | "model";
 
 const TABS: { id: Tab; label: string; icon: typeof FolderOpen }[] = [
   { id: "documents", label: "Documents", icon: FolderOpen },
   { id: "instructions", label: "Instructions", icon: MessageSquareText },
+  { id: "model", label: "Model", icon: Cpu },
 ];
+
+const PANELS: Record<Tab, ComponentType> = {
+  documents: DocumentsPanel,
+  instructions: InstructionsPanel,
+  model: ModelPanel,
+};
 
 export function AdminPage() {
   const queryClient = useQueryClient();
@@ -30,6 +38,7 @@ export function AdminPage() {
       // Drop cached admin data so the next person to sign in doesn't see it first.
       queryClient.removeQueries({ queryKey: DOCUMENTS_KEY });
       queryClient.removeQueries({ queryKey: INSTRUCTIONS_KEY });
+      queryClient.removeQueries({ queryKey: MODELS_KEY });
     },
   });
 
@@ -56,6 +65,8 @@ export function AdminPage() {
   }
 
   if (!session.data) return <LoginForm adminEnabled={health.data?.admin_enabled} />;
+
+  const Panel = PANELS[tab];
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -104,7 +115,7 @@ export function AdminPage() {
         </div>
 
         <div className="mt-6" role="tabpanel">
-          {tab === "documents" ? <DocumentsPanel /> : <InstructionsPanel />}
+          <Panel />
         </div>
       </div>
     </div>

@@ -55,3 +55,20 @@ export interface Instructions {
   text: string;
   updated_at: string | null;
 }
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface Models {
+  current: string;
+  options: ModelOption[];
+}
+
+export interface ReindexResult {
+  indexed: number;
+  skipped: number;
+  failed: Record<string, string>;
+}

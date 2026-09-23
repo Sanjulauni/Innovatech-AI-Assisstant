@@ -3,6 +3,8 @@ import type {
   ChatResponse,
   Health,
   Instructions,
+  Models,
+  ReindexResult,
   StoredDocument,
   StreamEvent,
   UploadResult,
@@ -125,6 +127,13 @@ export function uploadDocument(file: File): Promise<UploadResult> {
 
 export const deleteDocument = (docId: string) =>
   send(`/admin/documents/${encodeURIComponent(docId)}`, { method: "DELETE" }).then(() => undefined);
+
+export const reindexDocuments = () =>
+  json<ReindexResult>("/admin/documents/reindex", { method: "POST" });
+
+export const getModels = () => json<Models>("/admin/model");
+
+export const selectModel = (model: string) => json<Models>("/admin/model", jsonBody("PUT", { model }));
 
 export const getInstructions = () => json<Instructions>("/admin/instructions");
 
