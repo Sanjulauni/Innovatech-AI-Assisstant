@@ -25,16 +25,19 @@ class ModelProvider(str, Enum):
     GEMINI = "gemini"
 
 
+_ENV_CONFIG = SettingsConfigDict(
+    env_file=PROJECT_ROOT / ".env",
+    env_file_encoding="utf-8",
+    case_sensitive=False,
+    env_ignore_empty=True,  # `KEY=` in .env counts as "not set"
+    extra="ignore",
+)
+
+
 class Settings(BaseSettings):
     """Application settings, populated from the environment and ``.env``."""
 
-    model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        env_ignore_empty=True,  # `KEY=` in .env counts as "not set"
-        extra="ignore",
-    )
+    model_config = _ENV_CONFIG
 
     # --- Application -------------------------------------------------------
     app_name: str = "InnovaTech AI Assistant"
@@ -66,10 +69,9 @@ class Settings(BaseSettings):
     # Number of previous chat messages (user + assistant) sent with each question.
     chat_history_limit: int = Field(default=6, ge=0)
 
-    # --- API & UI ----------------------------------------------------------
+    # --- API ---------------------------------------------------------------
     api_host: str = "127.0.0.1"
     api_port: int = 8000
-    api_base_url: str = "http://127.0.0.1:8000"
 
     # --- Access control ----------------------------------------------------
     # Password for the admin endpoints and page. Admin features are disabled if unset.
@@ -132,6 +134,15 @@ class Settings(BaseSettings):
         slug = re.sub(r"[^a-z0-9]+", "-", self.embedding_model_name.lower()).strip("-")
         name = f"{self.collection_prefix}_{self.llm_provider.value}_{slug}"
         return name[:63].rstrip("-_")  # ChromaDB: max 63 chars, must end alphanumeric
+
+
+class UISettings(BaseSettings):
+    """The few settings the Streamlit UI needs. It never needs the Gemini key."""
+
+    model_config = _ENV_CONFIG
+
+    api_base_url: str = "http://127.0.0.1:8000"
+    request_timeout_seconds: float = Field(default=120.0, gt=0)
 
 
 @lru_cache
