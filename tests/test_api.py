@@ -274,6 +274,16 @@ def test_upload_returns_503_when_embeddings_fail(client, repository, monkeypatch
     assert "unreachable" not in response.json()["detail"]
 
 
+def test_upload_quota_error_has_clear_message(client, repository, monkeypatch):
+    def fail(*_args):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(repository, "add_document", fail)
+    response = upload(client)
+    assert response.status_code == 503
+    assert "usage limit was reached" in response.json()["detail"]
+
+
 def test_delete_unknown_document_returns_404(client):
     assert client.delete("/admin/documents/" + "a" * 64, headers=ADMIN).status_code == 404
 

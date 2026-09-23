@@ -14,6 +14,7 @@ from langchain_core.messages import BaseMessage
 
 from src.config import Settings, get_settings
 from src.data_pipeline.vector_store import SearchResult
+from src.model_factory import is_rate_limited
 from src.rag_engine.instructions import InstructionsStore
 from src.rag_engine.models import Answer, ChatMessage, Source
 from src.rag_engine.prompts import NOT_FOUND_MESSAGE, build_messages
@@ -168,19 +169,13 @@ class RAGChain:
 
 def _llm_error(exc: Exception) -> ServiceUnavailableError:
     logger.error("LLM call failed: %s", exc)
-    if _is_rate_limited(exc):
+    if is_rate_limited(exc):
         return ServiceUnavailableError(
             "The AI model is busy (usage limit reached). Please wait a minute and try again."
         )
     return ServiceUnavailableError(
         "The AI model is unavailable right now. Please try again shortly."
     )
-
-
-def _is_rate_limited(exc: Exception) -> bool:
-    """Whether the provider rejected the call for exceeding its quota (HTTP 429)."""
-    text = str(exc)
-    return "429" in text or "RESOURCE_EXHAUSTED" in text
 
 
 def is_not_found(answer: str) -> bool:

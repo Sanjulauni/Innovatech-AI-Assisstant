@@ -56,6 +56,7 @@ from src.data_pipeline.ingestion import (
     IngestionStatus,
     UnsupportedTypeError,
 )
+from src.model_factory import is_rate_limited
 from src.rag_engine.llm_chain import ServiceUnavailableError
 from src.rag_engine.models import Answer, ChatMessage
 
@@ -257,11 +258,17 @@ async def upload_document(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except Exception as exc:
         logger.exception("Indexing %r failed", filename)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "The document could not be indexed because the embedding service is unavailable. "
-            "Please try again shortly.",
-        ) from exc
+        if is_rate_limited(exc):
+            detail = (
+                "The embedding service's usage limit was reached while indexing this "
+                "document. Wait a minute, then upload it again."
+            )
+        else:
+            detail = (
+                "The document could not be indexed because the embedding service is "
+                "unavailable. Please try again shortly."
+            )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail) from exc
 
     if result.status is IngestionStatus.DUPLICATE:
         response.status_code = status.HTTP_200_OK

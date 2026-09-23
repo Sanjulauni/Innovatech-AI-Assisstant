@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(default=200, ge=0)
     allowed_extensions: set[str] = {".pdf", ".docx", ".txt", ".md"}
     max_upload_size_mb: int = Field(default=20, gt=0)
+    # Chunks sent to the embedding API per request, and how long to keep retrying when
+    # the provider's per-minute quota is reached (free tier) before giving up.
+    embedding_batch_size: int = Field(default=20, gt=0, le=100)
+    embedding_retry_seconds: float = Field(default=120, ge=0)
 
     # --- Retrieval ---------------------------------------------------------
     retriever_top_k: int = Field(default=4, gt=0)
