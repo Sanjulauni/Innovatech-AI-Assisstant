@@ -19,3 +19,8 @@ class RecordingChatModel(FakeListChatModel):
 class BrokenChatModel(FakeListChatModel):
     def _call(self, *args, **kwargs):
         raise ConnectionError("Gemini unreachable")
+
+
+class RateLimitedChatModel(FakeListChatModel):
+    def _call(self, *args, **kwargs):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")

@@ -81,6 +81,11 @@ class RAGChain:
             response = self._llm.invoke(messages)
         except Exception as exc:
             logger.error("LLM call failed: %s", exc)
+            if _is_rate_limited(exc):
+                raise ServiceUnavailableError(
+                    "The AI model is busy (usage limit reached). "
+                    "Please wait a minute and try again."
+                ) from exc
             raise ServiceUnavailableError(
                 "The AI model is unavailable right now. Please try again shortly."
             ) from exc
@@ -129,11 +134,17 @@ class RAGChain:
         return sources
 
 
+def _is_rate_limited(exc: Exception) -> bool:
+    """Whether the provider rejected the call for exceeding its quota (HTTP 429)."""
+    text = str(exc)
+    return "429" in text or "RESOURCE_EXHAUSTED" in text
+
+
 def is_not_found(answer: str) -> bool:
     """Whether the answer is the "not found" reply (ignoring case and apostrophe style)."""
 
     def normalize(text: str) -> str:
-        return text.replace("’", "'").strip().lower()  # curly -> straight apostrophe
+        return text.replace("\u2019", "'").strip().lower()  # curly -> straight apostrophe
 
     return normalize(answer).startswith(normalize(NOT_FOUND_MESSAGE).rstrip("."))
 
