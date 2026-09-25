@@ -107,6 +107,16 @@ class ModelSelectIn(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+class UploadLimitOut(BaseModel):
+    max_upload_size_mb: int = Field(description="Largest file accepted now, in MB.")
+    default_mb: int = Field(description="The limit from MAX_UPLOAD_SIZE_MB in .env.")
+    max_allowed_mb: int = Field(description="The highest limit that can be set.")
+
+
+class UploadLimitIn(BaseModel):
+    max_upload_size_mb: int = Field(ge=1)
+
+
 class InstructionsIn(BaseModel):
     text: str = Field(max_length=MAX_INSTRUCTIONS_LENGTH)
 

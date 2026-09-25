@@ -24,6 +24,9 @@ SOURCE = "source"
 FILE_NAME = "file_name"
 INGESTED_AT = "ingested_at"
 
+# Used if ChromaDB can't report its own limit (it is 5461 for the local client).
+_DEFAULT_BATCH_SIZE = 5000
+
 
 @dataclass(frozen=True)
 class StoredDocument:
@@ -87,14 +90,23 @@ class VectorStoreRepository:
         """Store the chunks of one document. Returns the number of chunks stored.
 
         Chunk ids are ``<doc_id>:<n>``, so adding the same document twice overwrites
-        its chunks instead of duplicating them.
+        its chunks instead of duplicating them. Large documents are stored in batches
+        (ChromaDB limits how many chunks one call may add); if a batch fails, the
+        chunks already stored are removed so no document is left half-indexed.
         """
         if not chunks:
             return 0
         for chunk in chunks:
             chunk.metadata[DOC_ID] = doc_id
         ids = [f"{doc_id}:{n}" for n in range(len(chunks))]
-        self._store.add_documents(chunks, ids=ids)
+        batch_size = self._max_batch_size()
+        try:
+            for start in range(0, len(chunks), batch_size):
+                end = start + batch_size
+                self._store.add_documents(chunks[start:end], ids=ids[start:end])
+        except Exception:
+            self.delete_document(doc_id)
+            raise
         logger.info("Stored %d chunks for document %s", len(chunks), doc_id[:12])
         return len(chunks)
 
@@ -134,6 +146,12 @@ class VectorStoreRepository:
             SearchResult(document=doc, score=max(0.0, min(1.0, 1.0 - distance)))
             for doc, distance in results
         ]
+
+    def _max_batch_size(self) -> int:
+        try:
+            return int(self._store._client.get_max_batch_size())
+        except Exception:
+            return _DEFAULT_BATCH_SIZE
 
     @staticmethod
     def _summarize(metadatas: list[dict]) -> list[StoredDocument]:

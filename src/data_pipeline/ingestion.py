@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -41,7 +42,7 @@ class UnsupportedTypeError(IngestionError):
 
 
 class FileTooLargeError(IngestionError):
-    """The file exceeds ``MAX_UPLOAD_SIZE_MB``."""
+    """The file exceeds the upload size limit."""
 
 
 class IngestionStatus(str, Enum):
@@ -80,17 +81,21 @@ class IngestionService:
         splitter: DocumentSplitter,
         raw_dir: Path,
         allowed_extensions: set[str],
-        max_size_bytes: int,
+        max_size_bytes: int | Callable[[], int],
     ) -> None:
         self._repository = repository
         self._splitter = splitter
         self._raw_dir = Path(raw_dir)
         self._allowed_extensions = allowed_extensions & DocumentLoaderFactory.supported_extensions()
+        # A callable is asked on every upload, so a limit changed by the admin applies at once.
         self._max_size_bytes = max_size_bytes
 
     @classmethod
     def from_settings(
-        cls, repository: VectorStoreRepository, settings: Settings | None = None
+        cls,
+        repository: VectorStoreRepository,
+        settings: Settings | None = None,
+        max_size_bytes: int | Callable[[], int] | None = None,
     ) -> IngestionService:
         settings = settings or get_settings()
         return cls(
@@ -98,12 +103,13 @@ class IngestionService:
             splitter=DocumentSplitter.from_settings(settings),
             raw_dir=settings.raw_data_dir,
             allowed_extensions=settings.allowed_extensions,
-            max_size_bytes=settings.max_upload_size_bytes,
+            max_size_bytes=max_size_bytes or settings.max_upload_size_bytes,
         )
 
     @property
     def max_size_bytes(self) -> int:
-        return self._max_size_bytes
+        limit = self._max_size_bytes
+        return limit() if callable(limit) else limit
 
     # --- Public API ------------------------------------------------------------
 
@@ -170,8 +176,9 @@ class IngestionService:
             raise UnsupportedTypeError(
                 f"'{filename}' is not a supported file type. Allowed types: {allowed}."
             )
-        if len(content) > self._max_size_bytes:
-            limit_mb = self._max_size_bytes / (1024 * 1024)
+        max_size_bytes = self.max_size_bytes
+        if len(content) > max_size_bytes:
+            limit_mb = max_size_bytes / (1024 * 1024)
             raise FileTooLargeError(f"'{source}' is larger than the {limit_mb:g} MB limit.")
         if not content:
             raise IngestionError(f"'{source}' is empty.")

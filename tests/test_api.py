@@ -255,6 +255,44 @@ def test_upload_rejects_too_large_file(client):
     assert "1 MB" in response.json()["detail"]
 
 
+def test_upload_limit_defaults_to_settings(client):
+    response = client.get("/admin/upload-limit", headers=ADMIN)
+    assert response.status_code == 200
+    assert response.json() == {"max_upload_size_mb": 1, "default_mb": 1, "max_allowed_mb": 200}
+
+
+def test_changed_upload_limit_applies_to_the_next_upload(client):
+    big = b"Leave is 14 days. " * 90_000  # about 1.5 MB
+    assert upload(client, "big.txt", big).status_code == 413
+
+    response = client.put("/admin/upload-limit", headers=ADMIN, json={"max_upload_size_mb": 2})
+    assert response.status_code == 200
+    assert response.json()["max_upload_size_mb"] == 2
+
+    assert upload(client, "big.txt", big).status_code == 201
+    too_big = upload(client, "bigger.txt", b"x" * (2 * 1024 * 1024 + 1))
+    assert too_big.status_code == 413
+    assert "2 MB" in too_big.json()["detail"]
+
+
+@pytest.mark.parametrize("value", [0, 201, "lots"])
+def test_upload_limit_rejects_invalid_values(client, value):
+    response = client.put("/admin/upload-limit", headers=ADMIN, json={"max_upload_size_mb": value})
+    assert response.status_code == 422
+    assert client.get("/admin/upload-limit", headers=ADMIN).json()["max_upload_size_mb"] == 1
+
+
+def test_upload_limit_above_maximum_explains_the_range(client):
+    response = client.put("/admin/upload-limit", headers=ADMIN, json={"max_upload_size_mb": 500})
+    assert "between 1 and 200 MB" in response.json()["detail"]
+
+
+def test_upload_limit_requires_admin(client):
+    assert client.get("/admin/upload-limit").status_code == 401
+    response = client.put("/admin/upload-limit", json={"max_upload_size_mb": 50})
+    assert response.status_code == 401
+
+
 def test_upload_rejects_corrupt_file(client):
     response = upload(client, "broken.pdf", b"not a pdf")
     assert response.status_code == 422
@@ -272,17 +310,9 @@ def test_upload_returns_503_when_embeddings_fail(client, repository, monkeypatch
     monkeypatch.setattr(repository, "add_document", fail)
     response = upload(client)
     assert response.status_code == 503
-    assert "embedding model failed" not in response.json()["detail"]
-
-
-def test_upload_quota_error_has_clear_message(client, repository, monkeypatch):
-    def fail(*_args):
-        raise RuntimeError("429 RESOURCE_EXHAUSTED")
-
-    monkeypatch.setattr(repository, "add_document", fail)
-    response = upload(client)
-    assert response.status_code == 503
-    assert "usage limit was reached" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "embedding model failed" not in detail
+    assert "could not be indexed" in detail
 
 
 def test_delete_unknown_document_returns_404(client):

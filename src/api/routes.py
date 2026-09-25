@@ -52,6 +52,8 @@ from src.api.schemas import (
     ModelsOut,
     ReindexResponse,
     SourceOut,
+    UploadLimitIn,
+    UploadLimitOut,
     UploadResponse,
 )
 from src.data_pipeline.ingestion import (
@@ -60,7 +62,6 @@ from src.data_pipeline.ingestion import (
     IngestionStatus,
     UnsupportedTypeError,
 )
-from src.model_factory import is_rate_limited
 from src.rag_engine.llm_chain import ServiceUnavailableError
 from src.rag_engine.models import Answer, ChatMessage
 
@@ -262,16 +263,12 @@ async def upload_document(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except Exception as exc:
         logger.exception("Indexing %r failed", filename)
-        if is_rate_limited(exc):
-            detail = (
-                "The embedding service's usage limit was reached while indexing this "
-                "document. Wait a minute, then upload it again."
-            )
-        else:
-            detail = (
-                "The document could not be indexed because the embedding service is "
-                "unavailable. Please try again shortly."
-            )
+        # Embeddings run locally, so this is a server-side problem (e.g. the embedding
+        # model couldn't be downloaded on first use, or the vector store failed).
+        detail = (
+            "The document could not be indexed because of a problem on the server. "
+            "Please try again shortly; if it keeps failing, check the server logs."
+        )
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail) from exc
 
     if result.status is IngestionStatus.DUPLICATE:
@@ -302,6 +299,33 @@ def delete_document(doc_id: DocId, services: ServicesDep) -> Response:
     if not services.ingestion.delete(doc_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Admin upload limit --------------------------------------------------------
+
+
+def _upload_limit(services: ServicesDep) -> UploadLimitOut:
+    limit = services.upload_limit
+    return UploadLimitOut(
+        max_upload_size_mb=limit.current_mb(),
+        default_mb=limit.default_mb,
+        max_allowed_mb=limit.max_mb,
+    )
+
+
+@admin_router.get("/upload-limit", response_model=UploadLimitOut)
+def get_upload_limit(services: ServicesDep) -> UploadLimitOut:
+    return _upload_limit(services)
+
+
+@admin_router.put("/upload-limit", response_model=UploadLimitOut)
+def set_upload_limit(body: UploadLimitIn, services: ServicesDep) -> UploadLimitOut:
+    """Change the largest file size accepted. It applies to the next upload."""
+    try:
+        services.upload_limit.set_mb(body.max_upload_size_mb)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return _upload_limit(services)
 
 
 # --- Admin model choice --------------------------------------------------------

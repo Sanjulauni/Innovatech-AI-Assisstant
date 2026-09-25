@@ -17,14 +17,17 @@ import { Alert, Button, Card, Spinner } from "../../components/ui";
 import {
   ApiError,
   deleteDocument,
+  getUploadLimit,
   listDocuments,
   reindexDocuments,
   uploadDocument,
 } from "../../lib/api";
 import type { ReindexResult, StoredDocument } from "../../lib/types";
-import { DOCUMENTS_KEY } from "./session";
+import { DOCUMENTS_KEY, UPLOAD_LIMIT_KEY } from "./session";
+import { UploadLimitSetting } from "./UploadLimitSetting";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".txt", ".md"];
+const MB = 1024 * 1024;
 
 type UploadStatus = "waiting" | "uploading" | "ingested" | "duplicate" | "error";
 
@@ -233,6 +236,8 @@ function ReindexButton() {
 export function DocumentsPanel() {
   const queryClient = useQueryClient();
   const documents = useQuery({ queryKey: DOCUMENTS_KEY, queryFn: listDocuments });
+  const uploadLimit = useQuery({ queryKey: UPLOAD_LIMIT_KEY, queryFn: getUploadLimit });
+  const limitMb = uploadLimit.data?.max_upload_size_mb;
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [filter, setFilter] = useState("");
   const busy = uploads.some((u) => u.status === "waiting" || u.status === "uploading");
@@ -248,13 +253,18 @@ export function DocumentsPanel() {
     }));
     setUploads(items.map((i) => i.item));
 
-    // One at a time: indexing calls the embedding API, which is rate limited.
+    // One at a time: indexing embeds on the server's CPU, so parallel uploads would only compete.
     for (const { file, item } of items) {
       if (!hasAcceptedType(file.name)) {
         setItem(item.id, {
           status: "error",
           message: `Not a supported file type. Use ${ACCEPTED_EXTENSIONS.join(", ")}.`,
         });
+        continue;
+      }
+      // The server checks too; this just avoids sending a file it would reject.
+      if (limitMb && file.size > limitMb * MB) {
+        setItem(item.id, { status: "error", message: `Larger than the ${limitMb} MB limit.` });
         continue;
       }
       setItem(item.id, { status: "uploading" });
@@ -284,6 +294,9 @@ export function DocumentsPanel() {
         </p>
         <div className="mt-4">
           <Dropzone onFiles={upload} busy={busy} />
+        </div>
+        <div className="mt-3">
+          <UploadLimitSetting />
         </div>
         {uploads.length > 0 && (
           <ul className="mt-3 divide-y divide-slate-100 dark:divide-slate-800" aria-label="Uploads">

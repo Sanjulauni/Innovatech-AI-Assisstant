@@ -11,6 +11,8 @@ const DOC = {
   ingested_at: "2026-09-23T08:00:00+00:00",
 };
 
+const LIMIT = { max_upload_size_mb: 20, default_mb: 20, max_allowed_mb: 200 };
+
 const unauthorized = () => jsonResponse({ detail: "Incorrect admin password." }, 401);
 
 /** Routes for a logged-in admin with the given documents. */
@@ -19,6 +21,7 @@ function loggedIn(documents = [DOC], extra = {}) {
     "GET /admin/session": () => jsonResponse({ authenticated: true }),
     "GET /admin/documents": () => jsonResponse(documents),
     "GET /admin/instructions": () => jsonResponse({ text: "Be concise.", updated_at: null }),
+    "GET /admin/upload-limit": () => jsonResponse(LIMIT),
     ...extra,
   });
 }
@@ -35,6 +38,7 @@ describe("AdminPage sign in", () => {
         return jsonResponse({ authenticated: true, expires_in: 28800 });
       },
       "GET /admin/documents": () => jsonResponse([DOC]),
+      "GET /admin/upload-limit": () => jsonResponse(LIMIT),
     });
     renderApp("/admin");
     const user = userEvent.setup();
@@ -68,6 +72,7 @@ describe("AdminPage sign in", () => {
     mockApi({
       "GET /admin/session": () => jsonResponse({ authenticated: true }),
       "GET /admin/documents": unauthorized,
+      "GET /admin/upload-limit": unauthorized,
     });
     renderApp("/admin");
 
@@ -176,6 +181,97 @@ describe("Documents", () => {
 
     expect(await screen.findByText(/No documents yet/)).toBeInTheDocument();
     expect(callsTo(fetchMock, "DELETE", `/admin/documents/${DOC.doc_id}`)).toHaveLength(1);
+  });
+});
+
+describe("Upload size limit", () => {
+  it("shows the current limit and changes it", async () => {
+    let limit = LIMIT;
+    const fetchMock = loggedIn([], {
+      "GET /admin/upload-limit": () => jsonResponse(limit),
+      "PUT /admin/upload-limit": (_url: string, init: RequestInit) => {
+        limit = { ...LIMIT, max_upload_size_mb: JSON.parse(init.body as string).max_upload_size_mb };
+        return jsonResponse(limit);
+      },
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("20 MB")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Change" }));
+    const input = screen.getByLabelText("Max file size (MB)");
+    expect(screen.getByText(/Between 1 and 200 MB/)).toBeInTheDocument();
+    await user.clear(input);
+    await user.type(input, "50");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("50 MB")).toBeInTheDocument();
+    expect(screen.getByText(/Applies to the next upload/)).toBeInTheDocument();
+    expect(callsTo(fetchMock, "PUT", "/admin/upload-limit")).toEqual([{ max_upload_size_mb: 50 }]);
+  });
+
+  it("only allows whole numbers within the range", async () => {
+    loggedIn([]);
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Change" }));
+    const input = screen.getByLabelText("Max file size (MB)");
+    const save = screen.getByRole("button", { name: "Save" });
+
+    for (const value of ["0", "201", "2.5"]) {
+      await user.clear(input);
+      await user.type(input, value);
+      expect(save).toBeDisabled();
+    }
+    await user.clear(input);
+    expect(save).toBeDisabled();
+    await user.type(input, "200");
+    expect(save).toBeEnabled();
+  });
+
+  it("cancel keeps the old limit", async () => {
+    const fetchMock = loggedIn([]);
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Change" }));
+    await user.type(screen.getByLabelText("Max file size (MB)"), "5");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByText("20 MB")).toBeInTheDocument();
+    expect(screen.queryByText(/Applies to the next upload/)).not.toBeInTheDocument();
+    expect(callsTo(fetchMock, "PUT", "/admin/upload-limit")).toHaveLength(0);
+  });
+
+  it("shows why saving failed", async () => {
+    loggedIn([], {
+      "PUT /admin/upload-limit": () =>
+        jsonResponse({ detail: "The upload limit must be between 1 and 200 MB." }, 422),
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Change" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("between 1 and 200 MB");
+  });
+
+  it("does not upload files over the limit", async () => {
+    const fetchMock = loggedIn([], {
+      "GET /admin/upload-limit": () => jsonResponse({ ...LIMIT, max_upload_size_mb: 1 }),
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await screen.findByText("1 MB");
+    const big = new File(["x"], "big.pdf");
+    Object.defineProperty(big, "size", { value: 1024 * 1024 + 1 });
+    await user.upload(screen.getByTestId("file-input"), big);
+
+    expect(await screen.findByText("Larger than the 1 MB limit.")).toBeInTheDocument();
+    expect(callsTo(fetchMock, "POST", "/admin/documents")).toHaveLength(0);
   });
 });
 

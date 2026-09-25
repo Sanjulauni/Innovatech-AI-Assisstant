@@ -1,5 +1,6 @@
 """Tests for the vector store repository (FR-05, FR-08, FR-09, NFR-19)."""
 
+import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
@@ -93,3 +94,43 @@ def test_persists_across_instances(tmp_path):
 
     second = VectorStoreRepository.from_settings(embeddings, settings)
     assert second.has_document("doc-a")
+
+
+def test_large_documents_are_stored_in_batches(repository, monkeypatch):
+    monkeypatch.setattr(repository, "_max_batch_size", lambda: 3)
+    calls = []
+    original = repository._store.add_documents
+    monkeypatch.setattr(
+        repository._store,
+        "add_documents",
+        lambda docs, ids: calls.append(len(docs)) or original(docs, ids=ids),
+    )
+
+    count = repository.add_document("doc-a", chunks("a.txt", *[f"part {n}" for n in range(7)]))
+
+    assert count == 7
+    assert calls == [3, 3, 1]
+    assert repository.get_document("doc-a").chunk_count == 7
+
+
+def test_failed_batch_leaves_no_partial_document(repository, monkeypatch):
+    monkeypatch.setattr(repository, "_max_batch_size", lambda: 2)
+    original = repository._store.add_documents
+    calls = []
+
+    def flaky(docs, ids):
+        calls.append(ids)
+        if len(calls) == 2:
+            raise RuntimeError("disk full")
+        return original(docs, ids=ids)
+
+    monkeypatch.setattr(repository._store, "add_documents", flaky)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        repository.add_document("doc-a", chunks("a.txt", "one", "two", "three", "four"))
+    assert not repository.has_document("doc-a")
+    assert repository.count_chunks() == 0
+
+
+def test_max_batch_size_comes_from_chromadb(repository):
+    assert repository._max_batch_size() > 1000

@@ -9,7 +9,13 @@ import { DocumentsPanel } from "./DocumentsPanel";
 import { InstructionsPanel } from "./InstructionsPanel";
 import { LoginForm } from "./LoginForm";
 import { ModelPanel } from "./ModelPanel";
-import { DOCUMENTS_KEY, INSTRUCTIONS_KEY, MODELS_KEY, SESSION_KEY } from "./session";
+import {
+  DOCUMENTS_KEY,
+  INSTRUCTIONS_KEY,
+  MODELS_KEY,
+  SESSION_KEY,
+  UPLOAD_LIMIT_KEY,
+} from "./session";
 
 type Tab = "documents" | "instructions" | "model";
 
@@ -39,6 +45,7 @@ export function AdminPage() {
       queryClient.removeQueries({ queryKey: DOCUMENTS_KEY });
       queryClient.removeQueries({ queryKey: INSTRUCTIONS_KEY });
       queryClient.removeQueries({ queryKey: MODELS_KEY });
+      queryClient.removeQueries({ queryKey: UPLOAD_LIMIT_KEY });
     },
   });
 

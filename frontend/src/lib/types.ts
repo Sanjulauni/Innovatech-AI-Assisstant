@@ -67,6 +67,12 @@ export interface Models {
   options: ModelOption[];
 }
 
+export interface UploadLimit {
+  max_upload_size_mb: number;
+  default_mb: number;
+  max_allowed_mb: number;
+}
+
 export interface ReindexResult {
   indexed: number;
   skipped: number;

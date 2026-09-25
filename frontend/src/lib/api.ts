@@ -7,6 +7,7 @@ import type {
   ReindexResult,
   StoredDocument,
   StreamEvent,
+  UploadLimit,
   UploadResult,
 } from "./types";
 
@@ -130,6 +131,11 @@ export const deleteDocument = (docId: string) =>
 
 export const reindexDocuments = () =>
   json<ReindexResult>("/admin/documents/reindex", { method: "POST" });
+
+export const getUploadLimit = () => json<UploadLimit>("/admin/upload-limit");
+
+export const saveUploadLimit = (mb: number) =>
+  json<UploadLimit>("/admin/upload-limit", jsonBody("PUT", { max_upload_size_mb: mb }));
 
 export const getModels = () => json<Models>("/admin/model");
 

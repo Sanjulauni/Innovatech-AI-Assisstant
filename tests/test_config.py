@@ -120,3 +120,9 @@ def test_absolute_paths_are_kept(tmp_path):
 
 def test_max_upload_size_bytes():
     assert make_settings(max_upload_size_mb=2).max_upload_size_bytes == 2 * 1024 * 1024
+
+
+def test_upload_size_default_must_not_exceed_the_cap():
+    assert make_settings().max_upload_size_cap_mb == 200
+    with pytest.raises(ValidationError, match="MAX_UPLOAD_SIZE_CAP_MB"):
+        make_settings(max_upload_size_mb=300)

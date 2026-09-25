@@ -47,6 +47,7 @@ _PATH_FIELDS = (
     "vector_db_dir",
     "instructions_file",
     "model_selection_file",
+    "upload_limit_file",
     "embedding_cache_dir",
     "frontend_dist_dir",
 )
@@ -90,7 +91,12 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=1000, gt=0)
     chunk_overlap: int = Field(default=200, ge=0)
     allowed_extensions: set[str] = {".pdf", ".docx", ".txt", ".md"}
+    # Largest upload accepted until the admin changes it on the Admin page.
     max_upload_size_mb: int = Field(default=20, gt=0)
+    # The highest limit the admin may set. Uploads are held in memory while indexed.
+    max_upload_size_cap_mb: int = Field(default=200, gt=0)
+    # The upload limit the admin set.
+    upload_limit_file: Path = PROJECT_ROOT / "data" / "upload_limit.json"
 
     # --- Retrieval ---------------------------------------------------------
     retriever_top_k: int = Field(default=4, gt=0)
@@ -133,6 +139,9 @@ class Settings(BaseSettings):
 
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
+
+        if self.max_upload_size_mb > self.max_upload_size_cap_mb:
+            raise ValueError("MAX_UPLOAD_SIZE_MB must not exceed MAX_UPLOAD_SIZE_CAP_MB.")
 
         if self.admin_password is not None and not self.admin_password.get_secret_value().strip():
             self.admin_password = None

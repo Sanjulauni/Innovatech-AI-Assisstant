@@ -1,6 +1,8 @@
 """Shared pytest fixtures."""
 
+import tempfile
 import uuid
+from pathlib import Path
 
 import chromadb
 import pytest
@@ -22,6 +24,8 @@ def clean_env(monkeypatch):
 def make_settings(**overrides) -> Settings:
     """Build settings from explicit values only, ignoring the real .env file."""
     overrides.setdefault("groq_api_key", "test-key")
+    # Never read or write the real data/upload_limit.json.
+    overrides.setdefault("upload_limit_file", Path(tempfile.mkdtemp()) / "upload_limit.json")
     return Settings(_env_file=None, **overrides)
 
 

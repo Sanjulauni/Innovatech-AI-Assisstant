@@ -36,6 +36,7 @@
 **For admins** (password-protected)
 - 📤 Upload PDF, Word (.docx), text and Markdown files (drag and drop, several at once)
 - 🔁 Duplicate uploads are detected and skipped; documents can be deleted
+- 📏 **Set the maximum file size** for uploads (default 20 MB); takes effect on the next upload
 - ✍️ Write instructions for the assistant (tone, format, escalation contacts). They shape
   answers but can't override the grounding rules.
 - 🤖 **Choose the chat model** (Groq free-tier models); takes effect on the next question
@@ -242,7 +243,8 @@ All settings live in `.env` (see `.env.example` for the full list).
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1000` / `200` | How documents are split |
 | `RETRIEVER_TOP_K` | `4` | Excerpts retrieved per question |
 | `CHAT_HISTORY_LIMIT` | `6` | Earlier messages sent with each question |
-| `MAX_UPLOAD_SIZE_MB` | `20` | Largest file accepted |
+| `MAX_UPLOAD_SIZE_MB` | `20` | Largest file accepted, until the admin changes it |
+| `MAX_UPLOAD_SIZE_CAP_MB` | `200` | Highest file size limit the admin can set |
 
 ---
 
@@ -260,6 +262,7 @@ Interactive docs: `/docs`. All endpoints are also available without the `/api` p
 | `GET` | `/api/admin/session` | admin | Check the session is still valid |
 | `GET` · `POST` | `/api/admin/documents` | admin | List / upload documents |
 | `DELETE` | `/api/admin/documents/{doc_id}` | admin | Delete a document |
+| `GET` · `PUT` | `/api/admin/upload-limit` | admin | Current / set the maximum file size |
 | `POST` | `/api/admin/documents/reindex` | admin | Index saved files not yet searchable |
 | `GET` · `PUT` | `/api/admin/model` | admin | Available models / choose one |
 | `GET` · `PUT` | `/api/admin/instructions` | admin | Read / save agent instructions |
