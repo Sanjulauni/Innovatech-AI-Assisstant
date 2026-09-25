@@ -10,6 +10,7 @@ import types
 import numpy as np
 import pytest
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 
 from src.model_factory import (
     EmbeddingFactory,
@@ -39,6 +40,14 @@ def test_llm_factory_builds_requested_model():
 def test_qwen_hides_its_reasoning_notes():
     llm = LLMFactory.create(make_settings(), "qwen/qwen3.8-27b")
     assert llm.reasoning_format == "hidden"
+
+
+def test_local_model_ids_build_a_client_for_the_local_server():
+    llm = LLMFactory.create(make_settings(local_llm_port=9001), "local:gemma-4-E2B")
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.openai_api_base == "http://127.0.0.1:9001/v1"
+    assert llm.model_name == "gemma-4-E2B"
+    assert llm.max_retries == 0
 
 
 def test_llm_factory_rejects_unregistered_provider(monkeypatch):

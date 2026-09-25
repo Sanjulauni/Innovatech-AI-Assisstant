@@ -13,7 +13,7 @@ from langchain_core.messages import BaseMessage
 
 from src.config import Settings, get_settings
 from src.data_pipeline.vector_store import SearchResult
-from src.model_factory import ChatModel, is_rate_limited
+from src.model_factory import ChatModel, ModelUnavailableError, is_rate_limited
 from src.rag_engine.instructions import InstructionsStore
 from src.rag_engine.model_selector import ModelSelector
 from src.rag_engine.models import Answer, ChatMessage, Source
@@ -52,12 +52,17 @@ class RAGChain:
         llm: ChatModel | ModelSelector,
         instructions: InstructionsStore | None = None,
         history_limit: int = 6,
+        local_top_k: int | None = None,
+        local_history_limit: int | None = None,
     ) -> None:
         self._retriever = retriever
         # A selector means the admin's current choice is used for each question.
         self._llm = llm
         self._instructions = instructions
         self._history_limit = history_limit
+        # Smaller prompts for the local model, which reads prompts slowly on a CPU.
+        self._local_top_k = local_top_k
+        self._local_history_limit = local_history_limit
 
     @classmethod
     def from_settings(
@@ -68,7 +73,14 @@ class RAGChain:
         settings: Settings | None = None,
     ) -> RAGChain:
         settings = settings or get_settings()
-        return cls(retriever, llm, instructions, history_limit=settings.chat_history_limit)
+        return cls(
+            retriever,
+            llm,
+            instructions,
+            history_limit=settings.chat_history_limit,
+            local_top_k=settings.local_llm_top_k,
+            local_history_limit=settings.local_llm_history_limit,
+        )
 
     def ask(self, question: str, history: list[ChatMessage] | None = None) -> Answer:
         question, history, results = self._retrieve(question, history)
@@ -117,9 +129,12 @@ class RAGChain:
         question = question.strip()
         if not question:
             raise ValueError("The question is empty.")
-        history = self._trim(history or [])
+        local = isinstance(self._llm, ModelSelector) and self._llm.local_selected()
+        limit = self._local_history_limit if local else None
+        history = self._trim(history or [], self._history_limit if limit is None else limit)
+        top_k = self._local_top_k if local else None
         try:
-            return question, history, self._retriever.retrieve(question, history)
+            return question, history, self._retriever.retrieve(question, history, k=top_k)
         except Exception as exc:
             logger.error("Retrieval failed: %s", exc)
             raise ServiceUnavailableError(
@@ -139,10 +154,11 @@ class RAGChain:
     def _current_llm(self) -> ChatModel:
         return self._llm.llm() if isinstance(self._llm, ModelSelector) else self._llm
 
-    def _trim(self, history: list[ChatMessage]) -> list[ChatMessage]:
-        if self._history_limit == 0:
+    @staticmethod
+    def _trim(history: list[ChatMessage], limit: int) -> list[ChatMessage]:
+        if limit == 0:
             return []
-        return [m for m in history if m.content.strip()][-self._history_limit :]
+        return [m for m in history if m.content.strip()][-limit:]
 
     @staticmethod
     def _select_sources(answer: str, results: list[SearchResult]) -> list[Source]:
@@ -182,6 +198,8 @@ class RAGChain:
 
 def _llm_error(exc: Exception) -> ServiceUnavailableError:
     logger.error("LLM call failed: %s", exc)
+    if isinstance(exc, ModelUnavailableError):
+        return ServiceUnavailableError(str(exc))  # already written for the user
     if is_rate_limited(exc):
         return ServiceUnavailableError(
             "The AI model is busy (usage limit reached). Please wait a minute and try again."

@@ -91,7 +91,8 @@ def health(services: ServicesDep) -> HealthResponse:
         status="ok" if store_ok else "degraded",
         vector_store="ok" if store_ok else "error",
         documents=documents,
-        llm_provider=settings.llm_provider.value,
+        llm_provider="local" if services.models.current() == settings.local_model_id
+        else settings.llm_provider.value,
         llm_model=services.models.current(),
         embedding_model=settings.embedding_model_name,
         admin_enabled=settings.admin_enabled,

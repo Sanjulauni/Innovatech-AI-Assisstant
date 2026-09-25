@@ -13,7 +13,12 @@ from src.api.auth import SESSION_COOKIE, LoginRateLimiter, SessionManager
 from src.api.dependencies import build_services
 from src.rag_engine.prompts import NOT_FOUND_MESSAGE
 from tests.conftest import make_settings
-from tests.fakes import BrokenChatModel, MidStreamFailureChatModel, RecordingChatModel
+from tests.fakes import (
+    BrokenChatModel,
+    MidStreamFailureChatModel,
+    RecordingChatModel,
+    StubLocalServer,
+)
 
 PASSWORD = "web-admin-password"
 
@@ -297,3 +302,82 @@ def test_cannot_read_files_outside_dist(client, built_frontend, settings):
 
 def test_no_frontend_build_returns_404(client):
     assert client.get("/").status_code == 404
+
+
+# --- Local model ---------------------------------------------------------------------------
+
+LOCAL = "local:gemma-4-E2B-it-Q4_K_M"
+
+
+def make_local_client(settings, repository, tmp_path, server, llm=None):
+    settings = settings.model_copy(
+        update={
+            "local_llm_server": tmp_path / "llama-server.exe",
+            "local_llm_model": tmp_path / "gemma-4-E2B-it-Q4_K_M.gguf",
+            "local_llm_label": "Gemma 4 E2B",
+        }
+    )
+    llm = llm or RecordingChatModel(responses=["Leave is 14 days [1]."])
+    services = build_services(
+        settings, DeterministicFakeEmbedding(size=32), llm, repository, local_server=server
+    )
+    return TestClient(create_app(services))
+
+
+def test_model_list_includes_the_local_model(settings, repository, tmp_path):
+    client = make_local_client(settings, repository, tmp_path, StubLocalServer())
+    login(client)
+
+    options = client.get("/api/admin/model").json()["options"]
+
+    assert options[0] == {
+        "id": "openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "description": options[0]["description"],
+        "kind": "cloud",
+        "status": "ready",
+        "detail": "",
+    }
+    assert options[-1]["id"] == LOCAL
+    assert (options[-1]["kind"], options[-1]["status"]) == ("local", "stopped")
+
+
+def test_selecting_the_local_model_starts_it_and_answers_with_it(settings, repository, tmp_path):
+    server = StubLocalServer()
+    client = make_local_client(settings, repository, tmp_path, server)
+    login(client)
+    upload(client)
+
+    body = client.put("/api/admin/model", json={"model": LOCAL}).json()
+    assert body["current"] == LOCAL
+    assert body["options"][-1]["status"] == "starting"
+
+    response = client.post("/api/chat", json={"question": "How much leave?"})
+    assert response.status_code == 200
+    assert server.calls == ["start", "wait"]
+    assert client.get("/api/health").json()["llm_provider"] == "local"
+
+
+def test_local_model_that_cannot_start_gives_a_clear_error(settings, repository, tmp_path):
+    server = StubLocalServer(error="The local model is still loading. Please try again.")
+    client = make_local_client(settings, repository, tmp_path, server)
+    login(client)
+    upload(client)
+    client.put("/api/admin/model", json={"model": LOCAL})
+
+    response = client.post("/api/chat", json={"question": "How much leave?"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "The local model is still loading. Please try again."
+
+
+def test_api_start_and_stop_manage_the_saved_local_model(settings, repository, tmp_path):
+    server = StubLocalServer()
+    first = make_local_client(settings, repository, tmp_path, server)
+    login(first)
+    first.put("/api/admin/model", json={"model": LOCAL})
+
+    restarted = StubLocalServer()
+    with make_local_client(settings, repository, tmp_path, restarted):
+        assert restarted.calls == ["start"]  # loading begins at startup
+    assert restarted.calls == ["start", "stop"]  # and the server is stopped at shutdown

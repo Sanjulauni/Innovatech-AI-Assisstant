@@ -16,11 +16,13 @@
 
 **InnovaTech AI** solves this challenge by implementing an internal, secure **Retrieval-Augmented Generation (RAG) AI assistant**. Built using **LangChain**, **FastAPI**, and **ChromaDB**, the assistant ingests, indexes, and summarizes private company documents locally within the enterprise boundary. Employees interact via a web interface to receive accurate, context-aware answers without compromising data privacy.
 
-> **Privacy note (current version).** Documents are stored, indexed and searched **locally**:
-> embeddings run on your own CPU and the vector database is on disk. To write an answer, the
-> question and the few most relevant excerpts are sent to the **Groq API**, a cloud service.
-> Full documents are never uploaded to Groq, but for highly confidential material a fully
-> local model (e.g. via Ollama) would be needed. That is planned, not built.
+> **Privacy note.** Documents are stored, indexed and searched **locally**: embeddings run on
+> your own CPU and the vector database is on disk. What happens to a question depends on the
+> chat model the admin selects:
+> - **Groq model (cloud):** the question and the few most relevant excerpts are sent to the
+>   Groq API to write the answer. Full documents are never uploaded.
+> - **Local model (optional):** a GGUF model runs on the same machine with llama.cpp, so
+>   **nothing leaves the machine at all**. See [Local model](#-local-model-optional).
 
 ---
 
@@ -39,7 +41,8 @@
 - 📏 **Set the maximum file size** for uploads (default 20 MB); takes effect on the next upload
 - ✍️ Write instructions for the assistant (tone, format, escalation contacts). They shape
   answers but can't override the grounding rules.
-- 🤖 **Choose the chat model** (Groq free-tier models); takes effect on the next question
+- 🤖 **Choose the chat model**: Groq free-tier models, or a **local GGUF model** that the
+  API starts and stops itself; takes effect on the next question
 - 🔄 Re-index saved files, e.g. after changing the embedding model
 
 **Safety**
@@ -69,8 +72,8 @@ The application follows the standard Software Development Life Cycle (SDLC) tail
      │        (rules + admin   (JSON file)       (admin's choice)
      │         + context)                              │
      ▼                                                 ▼
- [ChromaDB] ◄── [Local embeddings]              [Groq chat model]
- (on disk)       FastEmbed · CPU                  (cloud API)
+ [ChromaDB] ◄── [Local embeddings]        [Groq chat model] or [Local model]
+ (on disk)       FastEmbed · CPU            (cloud API)     llama-server · GGUF
      ▲
      │
  [Ingestion: Loader Factory → Text Splitter → Embeddings]
@@ -96,7 +99,7 @@ Facade (`RAGChain.ask` / `stream`), Singleton (settings), Dependency Injection (
 |---|---|
 | Language | Python 3.10+ (developed on 3.12), TypeScript |
 | RAG orchestration | LangChain |
-| Chat model | [Groq](https://console.groq.com) free tier: `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b` |
+| Chat model | [Groq](https://console.groq.com) free tier: `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`; optionally a local GGUF model via [llama.cpp](https://github.com/ggml-org/llama.cpp) |
 | Embeddings | [FastEmbed](https://github.com/qdrant/fastembed) `BAAI/bge-small-en-v1.5`, runs locally on CPU |
 | Vector store | ChromaDB (persistent, local) |
 | Backend | FastAPI + Uvicorn |
@@ -111,7 +114,8 @@ Facade (`RAGChain.ask` / `stream`), Singleton (settings), Dependency Injection (
 innovatech-rag-assistant/
 ├── src/
 │   ├── config.py              # settings from .env
-│   ├── model_factory.py       # Groq chat models, local embeddings
+│   ├── model_factory.py       # Groq and local chat models, local embeddings
+│   ├── local_llm.py           # starts/stops llama-server for the local model
 │   ├── api/                   # FastAPI app, routes, schemas, auth
 │   ├── rag_engine/            # RAG chain, prompts, retriever, model selector, instructions
 │   └── data_pipeline/         # loaders, text splitter, vector store, ingestion
@@ -226,6 +230,38 @@ Open **<http://localhost:8000>**. API docs (Swagger) are at **<http://localhost:
 
 ---
 
+## 🖥️ Local model (optional)
+
+Besides the Groq models, the admin can pick a **local model**: a GGUF file run on the
+API's machine by llama.cpp's `llama-server`. Questions and document excerpts then never
+leave the machine.
+
+1. Download a `llama-server` build for your platform from the
+   [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), and an
+   instruction-tuned GGUF model (for example Gemma 4 E2B, `Q4_K_M`).
+2. Point `.env` at both files (they can be on any drive):
+
+   ```ini
+   LOCAL_LLM_SERVER=D:\llama-bin\llama-server.exe
+   LOCAL_LLM_MODEL=D:\gemma-4-E2B-it-Q4_K_M.gguf
+   LOCAL_LLM_LABEL=Gemma 4 E2B
+   ```
+
+3. Restart the API. The model appears under **Admin → Model → On this server**.
+
+You don't start `llama-server` yourself. The API starts it when the local model is
+selected (and at startup if it was the last choice), shows *Loading* until the model is
+ready, and stops it when another model is selected, so the model only uses memory while it
+is in use. It listens on `127.0.0.1` only. Its output goes to `data/logs/llama-server.log`.
+
+> **Hardware and speed.** A 4-bit 2B-class model needs about 4 GB of free RAM. On a CPU the
+> model reads the prompt slowly, so the local model gets a smaller prompt (2 excerpts, 2
+> earlier messages) and answers without a hidden "thinking" step. On an entry-level laptop
+> CPU the first words still take 30–60 seconds. Keep the `.gguf` on an internal SSD rather
+> than a USB stick: with little free RAM, the model is re-read from disk while answering.
+
+---
+
 ## ⚙️ Configuration
 
 All settings live in `.env` (see `.env.example` for the full list).
@@ -243,6 +279,11 @@ All settings live in `.env` (see `.env.example` for the full list).
 | `CHAT_HISTORY_LIMIT` | `6` | Earlier messages sent with each question |
 | `MAX_UPLOAD_SIZE_MB` | `20` | Largest file accepted, until the admin changes it |
 | `MAX_UPLOAD_SIZE_CAP_MB` | `200` | Highest file size limit the admin can set |
+| `LOCAL_LLM_SERVER` / `LOCAL_LLM_MODEL` | empty | Paths to `llama-server` and a `.gguf` model; set both to offer the local model |
+| `LOCAL_LLM_LABEL` | file name | Name shown for the local model |
+| `LOCAL_LLM_PORT` / `LOCAL_LLM_CONTEXT_SIZE` | `8080` / `8192` | Port and context window of the local server |
+| `LOCAL_LLM_STARTUP_TIMEOUT` | `180` | Seconds to wait for the local model to load |
+| `LOCAL_LLM_TOP_K` / `LOCAL_LLM_HISTORY_LIMIT` | `2` / `2` | Excerpts and earlier messages sent to the local model (smaller prompts answer faster on a CPU) |
 
 ---
 
@@ -298,6 +339,9 @@ npm run typecheck
 | Admin page says admin access is turned off | Set `ADMIN_PASSWORD` in `.env` and restart the API |
 | Every answer is "I couldn't find this information…" | No documents are indexed yet: upload some, or click **Re-index saved files** |
 | First upload or question is slow | The embedding model is being downloaded (once, ~70 MB) |
+| Local model shows an error in **Admin → Model** | The message says why (e.g. file not found). More detail is in `data/logs/llama-server.log`. Fix it, then click the model to try again |
+| "The local model is still loading" | Loading takes a while on first use; wait and ask again |
+| Local model fails with "out of memory" / exits while loading | Close other programs, or use a smaller quantization (e.g. `Q4_K_S`) or lower `LOCAL_LLM_CONTEXT_SIZE` |
 | `http://127.0.0.1:5173` doesn't load | Use `http://localhost:5173` (the dev server listens on `localhost`) |
 
 ---

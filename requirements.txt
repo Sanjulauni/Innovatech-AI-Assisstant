@@ -8,6 +8,9 @@ chromadb>=1.0
 langchain-groq>=1.1
 fastembed>=0.8
 
+# --- Local chat model (optional; talks to llama-server's OpenAI-style API) ---
+langchain-openai>=0.3
+
 # --- Document loaders ---
 pypdf>=5.0
 docx2txt>=0.8

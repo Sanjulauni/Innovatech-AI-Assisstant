@@ -3,6 +3,9 @@
 The rest of the application depends only on LangChain's chat-model (``Runnable``) and
 ``Embeddings`` interfaces, so adding a provider (e.g. Ollama) means writing one
 builder function and registering it (FR-37, NFR-16).
+
+Model IDs starting with ``local:`` are the local GGUF model, served on this machine
+by ``llama-server`` (see ``local_llm.py``); all others are Groq models.
 """
 
 from __future__ import annotations
@@ -19,12 +22,26 @@ from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 
-from src.config import EmbeddingProvider, ModelProvider, Settings, get_settings
+from src.config import (
+    LOCAL_MODEL_PREFIX,
+    EmbeddingProvider,
+    ModelProvider,
+    Settings,
+    get_settings,
+)
 
 logger = logging.getLogger(__name__)
 
 # Anything with invoke/stream that returns a chat message.
 ChatModel = Runnable[LanguageModelInput, BaseMessage]
+
+
+# CPU-only machines can take minutes for a long answer.
+_LOCAL_TIMEOUT_SECONDS = 600
+
+
+class ModelUnavailableError(Exception):
+    """The chat model can't answer right now. The message is safe to show to the user."""
 
 
 def is_rate_limited(exc: BaseException) -> bool:
@@ -92,6 +109,20 @@ def _build_groq_llm(settings: Settings, model: str) -> BaseChatModel:
     )
 
 
+def _build_local_llm(settings: Settings, model: str) -> BaseChatModel:
+    from langchain_openai import ChatOpenAI
+
+    # llama-server serves one model and ignores the name; it needs no API key.
+    return ChatOpenAI(
+        model=model.removeprefix(LOCAL_MODEL_PREFIX),
+        base_url=settings.local_llm_base_url,
+        api_key="not-needed",
+        temperature=settings.llm_temperature,
+        timeout=_LOCAL_TIMEOUT_SECONDS,
+        max_retries=0,  # retrying a slow local model only makes the wait longer
+    )
+
+
 def _build_fastembed(settings: Settings) -> Embeddings:
     return FastEmbedEmbeddings(settings.embedding_model, settings.embedding_cache_dir)
 
@@ -100,7 +131,7 @@ def _build_fastembed(settings: Settings) -> Embeddings:
 
 
 class LLMFactory:
-    """Creates a chat model for the configured ``LLM_PROVIDER``."""
+    """Creates a chat model: the local model for ``local:`` IDs, else ``LLM_PROVIDER``'s."""
 
     _BUILDERS: dict[ModelProvider, Callable[[Settings, str], ChatModel]] = {
         ModelProvider.GROQ: _build_groq_llm,
@@ -109,10 +140,13 @@ class LLMFactory:
     @classmethod
     def create(cls, settings: Settings | None = None, model: str | None = None) -> ChatModel:
         settings = settings or get_settings()
+        model = model or settings.default_model
+        if model.startswith(LOCAL_MODEL_PREFIX):
+            logger.info("Using local LLM model=%s", model)
+            return _build_local_llm(settings, model)
         builder = cls._BUILDERS.get(settings.llm_provider)
         if builder is None:
             raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")
-        model = model or settings.default_model
         logger.info("Using LLM provider=%s model=%s", settings.llm_provider.value, model)
         return builder(settings, model)
 

@@ -18,10 +18,11 @@ from src.config import Settings
 from src.data_pipeline.ingestion import IngestionService
 from src.data_pipeline.upload_limit import UploadLimit
 from src.data_pipeline.vector_store import VectorStoreRepository
+from src.local_llm import LocalLLMServer
 from src.model_factory import ChatModel, EmbeddingFactory, LLMFactory
 from src.rag_engine.instructions import InstructionsStore
 from src.rag_engine.llm_chain import RAGChain
-from src.rag_engine.model_selector import ModelSelector
+from src.rag_engine.model_selector import LocalModel, ModelSelector
 from src.rag_engine.retriever import DocumentRetriever
 
 ADMIN_HEADER = "X-Admin-Password"
@@ -45,6 +46,7 @@ def build_services(
     embeddings: Embeddings | None = None,
     llm: ChatModel | None = None,
     repository: VectorStoreRepository | None = None,
+    local_server: LocalLLMServer | None = None,
 ) -> Services:
     """Create every service from settings. Any argument given replaces the real one.
 
@@ -58,6 +60,7 @@ def build_services(
         settings.available_models,
         factory=(lambda _model: llm) if llm else (lambda model: LLMFactory.create(settings, model)),
         store_path=settings.model_selection_file,
+        local=_local_model(settings, local_server),
     )
     upload_limit = UploadLimit.from_settings(settings)
     chain = RAGChain.from_settings(
@@ -76,6 +79,15 @@ def build_services(
         sessions=SessionManager(ttl_seconds=int(settings.admin_session_hours * 3600)),
         login_limiter=LoginRateLimiter(),
     )
+
+
+def _local_model(settings: Settings, server: LocalLLMServer | None) -> LocalModel | None:
+    """The local model, if LOCAL_LLM_SERVER and LOCAL_LLM_MODEL are set."""
+    server = server or LocalLLMServer.from_settings(settings)
+    if server is None or settings.local_model_id is None:
+        return None
+    label = settings.local_llm_label.strip() or settings.local_llm_model.stem
+    return LocalModel(id=settings.local_model_id, label=label, server=server)
 
 
 def get_services(request: Request) -> Services:

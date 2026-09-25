@@ -4,8 +4,10 @@ import json
 
 import pytest
 
-from src.rag_engine.model_selector import ModelSelector, describe
-from tests.fakes import RecordingChatModel
+from src.local_llm import ServerState, ServerStatus
+from src.model_factory import ModelUnavailableError
+from src.rag_engine.model_selector import LocalModel, ModelSelector, describe
+from tests.fakes import RecordingChatModel, StubLocalServer
 
 MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
 
@@ -94,3 +96,92 @@ def test_unknown_models_are_shown_by_id():
 def test_needs_at_least_one_model():
     with pytest.raises(ValueError):
         ModelSelector([], lambda m: None)
+
+
+# --- Local model --------------------------------------------------------------------------
+
+LOCAL = "local:gemma-4-E2B-it-Q4_K_M"
+
+
+def make_local_selector(tmp_path, server=None):
+    server = server or StubLocalServer()
+    selector, built = make_selector(tmp_path)
+    selector = ModelSelector(
+        MODELS,
+        selector._factory,
+        tmp_path / "selection.json",
+        local=LocalModel(id=LOCAL, label="Gemma 4 E2B", server=server),
+    )
+    return selector, server, built
+
+
+def test_local_model_is_listed_last_with_its_state(tmp_path):
+    selector, _, _ = make_local_selector(tmp_path)
+
+    options = selector.options()
+
+    assert [o.id for o in options] == [*MODELS, LOCAL]
+    assert {o.kind for o in options[:3]} == {"cloud"}
+    assert {o.status for o in options[:3]} == {"ready"}
+    local = options[-1]
+    assert (local.kind, local.label, local.status) == ("local", "Gemma 4 E2B", "stopped")
+    assert "never leave the machine" in local.description
+
+
+def test_local_error_is_shown_with_its_reason(tmp_path):
+    server = StubLocalServer(ServerState(ServerStatus.ERROR, "The model file was not found."))
+    selector, _, _ = make_local_selector(tmp_path, server)
+    local = selector.options()[-1]
+    assert (local.status, local.detail) == ("error", "The model file was not found.")
+
+
+def test_selecting_local_starts_it_and_switching_away_stops_it(tmp_path):
+    selector, server, _ = make_local_selector(tmp_path)
+
+    selector.select(LOCAL)
+    assert server.calls == ["start"]
+    assert selector.options()[-1].status == "starting"
+
+    selector.select("openai/gpt-oss-20b")
+    assert server.calls == ["start", "stop"]
+
+
+def test_local_model_waits_for_its_server(tmp_path):
+    selector, server, built = make_local_selector(tmp_path)
+    selector.select(LOCAL)
+
+    assert selector.llm().invoke("hi").text == f"answer from {LOCAL}"
+    assert server.calls == ["start", "wait"]
+    assert built == [LOCAL]
+
+
+def test_cloud_models_never_touch_the_local_server(tmp_path):
+    selector, server, _ = make_local_selector(tmp_path)
+    selector.llm()
+    assert server.calls == []
+
+
+def test_local_model_that_cannot_start_raises(tmp_path):
+    server = StubLocalServer(error="The local model is still loading.")
+    selector, _, built = make_local_selector(tmp_path, server)
+    selector.select(LOCAL)
+
+    with pytest.raises(ModelUnavailableError, match="still loading"):
+        selector.llm()
+    assert built == []
+
+
+def test_activate_starts_the_saved_local_model_and_shutdown_stops_it(tmp_path):
+    make_local_selector(tmp_path)[0].select(LOCAL)
+    restarted, server, _ = make_local_selector(tmp_path)
+
+    restarted.activate()
+    restarted.shutdown()
+
+    assert server.calls == ["start", "stop"]
+
+
+def test_activate_does_nothing_for_cloud_models(tmp_path):
+    selector, server, _ = make_local_selector(tmp_path)
+    selector.activate()
+    assert server.calls == []

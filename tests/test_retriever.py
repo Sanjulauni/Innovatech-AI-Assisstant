@@ -15,6 +15,7 @@ from src.rag_engine.llm_chain import (
     is_not_found,
     normalize_citations,
 )
+from src.rag_engine.model_selector import LocalModel, ModelSelector
 from src.rag_engine.models import ChatMessage
 from src.rag_engine.prompts import (
     NOT_FOUND_MESSAGE,
@@ -30,6 +31,7 @@ from tests.fakes import (
     OverloadedChatModel,
     RateLimitedChatModel,
     RecordingChatModel,
+    StubLocalServer,
 )
 
 
@@ -417,3 +419,59 @@ def test_streamed_answer_is_normalized_in_final_event(repository):
 
     assert answer.answer == "Yes [1]."
     assert [s.index for s in answer.sources] == [1]
+
+
+# --- Smaller prompts for the local model --------------------------------------------------
+
+
+def make_selector_chain(repository, tmp_path, local_selected):
+    llm = RecordingChatModel(responses=["Leave is 14 days [1]."] * 2)
+    local_id = "local:gemma"
+    selector = ModelSelector(
+        ["openai/gpt-oss-120b"],
+        lambda _model: llm,
+        tmp_path / "selection.json",
+        local=LocalModel(id=local_id, label="Gemma", server=StubLocalServer()),
+    )
+    if local_selected:
+        selector.select(local_id)
+    chain = RAGChain(
+        DocumentRetriever(repository, top_k=4),
+        selector,
+        history_limit=6,
+        local_top_k=2,
+        local_history_limit=2,
+    )
+    return chain, llm
+
+
+HISTORY = [
+    ChatMessage("user", f"question {n}") if n % 2 == 0 else ChatMessage("assistant", f"answer {n}")
+    for n in range(6)
+]
+
+
+def sent(llm):
+    """(number of excerpts, number of history messages) in the last prompt."""
+    messages = llm.prompts[-1]
+    return messages[-1].content.count("<document "), len(messages) - 2
+
+
+@pytest.mark.parametrize(("local", "expected"), [(False, (4, 6)), (True, (2, 2))])
+def test_local_model_gets_fewer_excerpts_and_less_history(repository, tmp_path, local, expected):
+    add_doc(repository, "doc-a", "a.txt", *[f"Leave rule {n}." for n in range(5)])
+    chain, llm = make_selector_chain(repository, tmp_path, local_selected=local)
+
+    chain.ask("How much leave?", HISTORY)
+    assert sent(llm) == expected
+
+    list(chain.stream("How much leave?", HISTORY))
+    assert sent(llm) == expected
+
+
+def test_local_limits_come_from_settings(repository):
+    settings = make_settings(local_llm_top_k=3, local_llm_history_limit=1)
+    chain = RAGChain.from_settings(
+        DocumentRetriever(repository, 4), RecordingChatModel(responses=["x"]), settings=settings
+    )
+    assert (chain._local_top_k, chain._local_history_limit) == (3, 1)

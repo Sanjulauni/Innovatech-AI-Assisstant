@@ -96,6 +96,11 @@ class ModelOptionOut(BaseModel):
     id: str
     label: str
     description: str
+    kind: Literal["cloud", "local"] = Field(description="Cloud (Groq) or on this server.")
+    status: Literal["stopped", "starting", "ready", "error"] = Field(
+        description="Cloud models are always ready. The local model starts when selected."
+    )
+    detail: str = Field(default="", description="Why the local model is in error.")
 
 
 class ModelsOut(BaseModel):

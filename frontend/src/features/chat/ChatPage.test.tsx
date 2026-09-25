@@ -2,7 +2,15 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { callsTo, jsonResponse, mockApi, ndjson, renderApp, streamResponse } from "../../test/utils";
+import {
+  callsTo,
+  HEALTH,
+  jsonResponse,
+  mockApi,
+  ndjson,
+  renderApp,
+  streamResponse,
+} from "../../test/utils";
 
 const SOURCE = {
   index: 1,
@@ -149,6 +157,31 @@ describe("ChatPage", () => {
     await user.click(screen.getByRole("button", { name: /new chat/i }));
     expect(screen.queryByText("How much leave?")).not.toBeInTheDocument();
     expect(screen.getByText("How can I help?")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["local", true],
+    ["groq", false],
+  ])("while the %s model reads the question, explains the wait: %s", async (provider, shown) => {
+    let finish = () => {};
+    mockApi({
+      "GET /health": () => jsonResponse({ ...HEALTH, llm_provider: provider }),
+      "POST /chat/stream": () =>
+        new Promise<Response>((resolve) => {
+          finish = () => resolve(answerStream());
+        }),
+    });
+    renderApp();
+    await screen.findByTitle(/Model:/); // health has loaded
+    await ask("How much leave?");
+
+    expect(await screen.findByText("Searching the documents…")).toBeInTheDocument();
+    const hint = screen.queryByText(/first words can take about a minute/);
+    expect(hint !== null).toBe(shown);
+
+    finish();
+    expect(await screen.findByText("18 days")).toBeInTheDocument();
+    expect(screen.queryByText(/first words can take about a minute/)).not.toBeInTheDocument();
   });
 
   it("shows server status in the header", async () => {

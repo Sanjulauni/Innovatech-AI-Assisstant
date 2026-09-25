@@ -1,8 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Bot, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import { Alert, Button } from "../../components/ui";
+import { getHealth } from "../../lib/api";
 import { AnswerMarkdown } from "./AnswerMarkdown";
 import { SourceList } from "./SourceList";
 import type { Message } from "./useChat";
@@ -15,6 +17,9 @@ interface Props {
 export function MessageItem({ message, onRetry }: Props) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [highlighted, setHighlighted] = useState<number | null>(null);
+  // Shares the header's cached health; tells us whether the local model is answering.
+  const health = useQuery({ queryKey: ["health"], queryFn: getHealth });
+  const localModel = health.data?.llm_provider === "local";
 
   if (message.role === "user") {
     return (
@@ -57,6 +62,11 @@ export function MessageItem({ message, onRetry }: Props) {
             </span>
           </div>
         ) : null}
+        {streaming && !message.content && localModel && (
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            The local model runs on this computer, so the first words can take about a minute.
+          </p>
+        )}
 
         {message.status === "stopped" && (
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Stopped.</p>

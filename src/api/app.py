@@ -36,7 +36,12 @@ def create_app(services: Services | None = None) -> FastAPI:
             app.state.services = build_services(settings)
             if not settings.admin_enabled:
                 logger.warning("ADMIN_PASSWORD is not set: admin endpoints are disabled.")
-        yield
+        models = app.state.services.models
+        models.activate()  # start loading the local model if it's the saved choice
+        try:
+            yield
+        finally:
+            models.shutdown()  # stop the local model's server
 
     app = FastAPI(
         title="InnovaTech AI Assistant API",

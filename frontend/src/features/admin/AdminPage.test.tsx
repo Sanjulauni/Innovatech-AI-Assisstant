@@ -317,14 +317,40 @@ describe("Instructions", () => {
   });
 });
 
+const cloud = (id: string, label: string, description: string) => ({
+  id,
+  label,
+  description,
+  kind: "cloud",
+  status: "ready",
+  detail: "",
+});
+
 const MODELS = {
   current: "openai/gpt-oss-120b",
   options: [
-    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", description: "Best answer quality." },
-    { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B", description: "Fastest." },
-    { id: "qwen/qwen3.8-27b", label: "Qwen 3.8 27B", description: "Strong reasoning." },
+    cloud("openai/gpt-oss-120b", "GPT-OSS 120B", "Best answer quality."),
+    cloud("openai/gpt-oss-20b", "GPT-OSS 20B", "Fastest."),
+    cloud("qwen/qwen3.8-27b", "Qwen 3.8 27B", "Strong reasoning."),
   ],
 };
+
+const LOCAL_ID = "local:gemma-4-E2B-it-Q4_K_M";
+
+const withLocal = (current: string, status: string, detail = "") => ({
+  current,
+  options: [
+    ...MODELS.options,
+    {
+      id: LOCAL_ID,
+      label: "Gemma 4 E2B",
+      description: "Runs on this server.",
+      kind: "local",
+      status,
+      detail,
+    },
+  ],
+});
 
 describe("Model", () => {
   it("shows the models with the current one selected, and switches", async () => {
@@ -376,6 +402,68 @@ describe("Model", () => {
     await user.click(await screen.findByRole("radio", { name: /GPT-OSS 20B/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("not one of the available models");
+  });
+});
+
+describe("Local model", () => {
+  it("groups the models and shows the local one as stopped until selected", async () => {
+    loggedIn([], { "GET /admin/model": () => jsonResponse(withLocal(MODELS.current, "stopped")) });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("tab", { name: /model/i }));
+
+    expect(await screen.findByText("Cloud (Groq)")).toBeInTheDocument();
+    expect(screen.getByText("On this server")).toBeInTheDocument();
+    const local = screen.getByRole("radio", { name: /Gemma 4 E2B/ });
+    expect(within(local).getByText("Private")).toBeInTheDocument();
+    expect(within(local).getByText("Starts when selected.")).toBeInTheDocument();
+  });
+
+  it("selects the local model, shows it loading, then ready", async () => {
+    let state = withLocal(MODELS.current, "stopped");
+    let polls = 0;
+    const fetchMock = loggedIn([], {
+      "GET /admin/model": () => {
+        // Still loading on the first poll, ready on the next one.
+        if (state.current === LOCAL_ID && ++polls > 1) state = withLocal(LOCAL_ID, "ready");
+        return jsonResponse(state);
+      },
+      "PUT /admin/model": () => {
+        state = withLocal(LOCAL_ID, "starting");
+        return jsonResponse(state);
+      },
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("tab", { name: /model/i }));
+    await user.click(await screen.findByRole("radio", { name: /Gemma 4 E2B/ }));
+
+    expect(await screen.findByText(/Loading Gemma 4 E2B/)).toBeInTheDocument();
+    expect(screen.getByText(/Loading the model/)).toBeInTheDocument();
+    expect(await screen.findByText("Now answering with Gemma 4 E2B.", {}, { timeout: 6000 })).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(callsTo(fetchMock, "PUT", "/admin/model")).toEqual([{ model: LOCAL_ID }]);
+  }, 10000);
+
+  it("shows why the local model failed and retries when clicked", async () => {
+    const failed = withLocal(LOCAL_ID, "error", "The model file was not found at D:\\gemma.gguf.");
+    const fetchMock = loggedIn([], {
+      "GET /admin/model": () => jsonResponse(failed),
+      "PUT /admin/model": () => jsonResponse(withLocal(LOCAL_ID, "starting")),
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("tab", { name: /model/i }));
+    const local = await screen.findByRole("radio", { name: /Gemma 4 E2B/ });
+    expect(within(local).getByText(/The model file was not found/)).toBeInTheDocument();
+
+    await user.click(local);
+
+    expect(callsTo(fetchMock, "PUT", "/admin/model")).toEqual([{ model: LOCAL_ID }]);
+    expect(await screen.findByText(/Loading Gemma 4 E2B/)).toBeInTheDocument();
   });
 });
 

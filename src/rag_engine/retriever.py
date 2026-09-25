@@ -32,6 +32,8 @@ class DocumentRetriever:
         return cls(repository, top_k=settings.retriever_top_k)
 
     def retrieve(
-        self, question: str, history: list[ChatMessage] | None = None
+        self, question: str, history: list[ChatMessage] | None = None, k: int | None = None
     ) -> list[SearchResult]:
-        return self._repository.search(build_search_query(question, history), k=self._top_k)
+        """The ``k`` best chunks (default: the configured top-k)."""
+        query = build_search_query(question, history)
+        return self._repository.search(query, k=k or self._top_k)

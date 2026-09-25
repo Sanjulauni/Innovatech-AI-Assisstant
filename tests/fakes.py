@@ -5,6 +5,9 @@ from typing import Any
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from pydantic import Field
 
+from src.local_llm import ServerState, ServerStatus
+from src.model_factory import ModelUnavailableError
+
 
 class RecordingChatModel(FakeListChatModel):
     """Fake LLM that returns canned responses and remembers every prompt."""
@@ -45,3 +48,29 @@ class MidStreamFailureChatModel(FakeListChatModel):
 class OverloadedChatModel(FakeListChatModel):
     def _call(self, *args, **kwargs):
         raise RuntimeError("503 UNAVAILABLE: This model is currently experiencing high demand.")
+
+
+class StubLocalServer:
+    """Stands in for ``LocalLLMServer`` without starting a process; records calls."""
+
+    def __init__(self, state=None, error: str | None = None) -> None:
+        self._state = state or ServerState(ServerStatus.STOPPED)
+        self._error = error  # raised by wait_until_ready, if set
+        self.calls: list[str] = []
+
+    def start(self) -> None:
+        self.calls.append("start")
+        self._state = ServerState(ServerStatus.STARTING)
+
+    def stop(self) -> None:
+        self.calls.append("stop")
+        self._state = ServerState(ServerStatus.STOPPED)
+
+    def wait_until_ready(self) -> None:
+        self.calls.append("wait")
+        if self._error:
+            raise ModelUnavailableError(self._error)
+        self._state = ServerState(ServerStatus.READY)
+
+    def refresh(self):
+        return self._state

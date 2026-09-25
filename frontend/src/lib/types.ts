@@ -56,10 +56,18 @@ export interface Instructions {
   updated_at: string | null;
 }
 
+export type ModelStatus = "stopped" | "starting" | "ready" | "error";
+
 export interface ModelOption {
   id: string;
   label: string;
   description: string;
+  /** "cloud" = Groq; "local" = runs on the API's machine. */
+  kind: "cloud" | "local";
+  /** Cloud models are always "ready"; the local model starts when selected. */
+  status: ModelStatus;
+  /** Why the local model is in error. */
+  detail: string;
 }
 
 export interface Models {

@@ -126,3 +126,35 @@ def test_upload_size_default_must_not_exceed_the_cap():
     assert make_settings().max_upload_size_cap_mb == 200
     with pytest.raises(ValidationError, match="MAX_UPLOAD_SIZE_CAP_MB"):
         make_settings(max_upload_size_mb=300)
+
+
+# --- Local model -------------------------------------------------------------------------
+
+
+def test_no_local_model_by_default():
+    settings = make_settings()
+    assert settings.local_model_id is None
+    assert settings.available_models == settings.groq_models
+
+
+def test_local_model_is_added_after_groq_models(tmp_path):
+    settings = make_settings(
+        local_llm_server=tmp_path / "llama-server.exe",
+        local_llm_model=tmp_path / "gemma-4-E2B-it-Q4_K_M.gguf",
+    )
+    assert settings.local_model_id == "local:gemma-4-E2B-it-Q4_K_M"
+    assert settings.available_models[-1] == "local:gemma-4-E2B-it-Q4_K_M"
+    assert settings.default_model == "openai/gpt-oss-120b"  # the default stays a Groq model
+    assert settings.local_llm_base_url == "http://127.0.0.1:8080/v1"
+
+
+@pytest.mark.parametrize("field", ["local_llm_server", "local_llm_model"])
+def test_local_model_needs_both_paths(tmp_path, field):
+    with pytest.raises(ValidationError, match="both LOCAL_LLM_SERVER and LOCAL_LLM_MODEL"):
+        make_settings(**{field: tmp_path / "x"})
+
+
+def test_relative_local_paths_are_resolved_against_project_root():
+    settings = make_settings(local_llm_server="bin/llama-server", local_llm_model="m/g.gguf")
+    assert settings.local_llm_server == PROJECT_ROOT / "bin" / "llama-server"
+    assert settings.local_llm_model == PROJECT_ROOT / "m" / "g.gguf"

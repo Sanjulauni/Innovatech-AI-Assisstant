@@ -3,9 +3,10 @@
 All tunable values are read from environment variables or a local ``.env`` file
 (see ``.env.example``). Nothing configurable should be hard-coded elsewhere (NFR-15).
 
-Chat answers come from the Groq API (free tier); the admin picks which of the
-``GROQ_MODELS`` to use. Document embeddings are computed locally with FastEmbed,
-so indexing and search need no API and no quota.
+Chat answers come from the Groq API (free tier) or, if configured, a local GGUF
+model served by llama.cpp's ``llama-server`` on this machine; the admin picks
+which one to use. Document embeddings are computed locally with FastEmbed, so
+indexing and search need no API and no quota.
 """
 
 from __future__ import annotations
@@ -20,6 +21,11 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Model IDs of local models start with this, e.g. "local:gemma-4-E2B-it-Q4_K_M".
+LOCAL_MODEL_PREFIX = "local:"
+# The local model server only listens on this machine, never on the network.
+LOCAL_LLM_HOST = "127.0.0.1"
 
 
 class ModelProvider(str, Enum):
@@ -48,6 +54,7 @@ _PATH_FIELDS = (
     "instructions_file",
     "model_selection_file",
     "upload_limit_file",
+    "local_llm_log_file",
     "embedding_cache_dir",
     "frontend_dist_dir",
 )
@@ -72,6 +79,24 @@ class Settings(BaseSettings):
         "openai/gpt-oss-20b",
         "qwen/qwen3.8-27b",
     ]
+
+    # --- Local chat model (optional) ---------------------------------------
+    # A GGUF model the API runs with llama.cpp's llama-server. Set both paths to
+    # offer it in the Admin page's model list; the server starts when it's selected.
+    local_llm_server: Path | None = None  # path to llama-server(.exe)
+    local_llm_model: Path | None = None  # path to the .gguf file
+    local_llm_label: str = ""  # name shown to the admin; defaults to the file name
+    local_llm_port: int = Field(default=8080, gt=0, lt=65536)
+    local_llm_context_size: int = Field(default=8192, gt=0)
+    # Loading a model from disk can take a while on a slow drive or CPU.
+    local_llm_startup_timeout: float = Field(default=180, gt=0)
+    # Extra llama-server options, e.g. "--threads 4". They override the defaults.
+    local_llm_args: str = ""
+    # A CPU reads a prompt slowly (~30 tokens/s on a laptop), so the local model gets
+    # fewer excerpts and less history than the cloud models.
+    local_llm_top_k: int = Field(default=2, gt=0)
+    local_llm_history_limit: int = Field(default=2, ge=0)
+    local_llm_log_file: Path = PROJECT_ROOT / "data" / "logs" / "llama-server.log"
 
     # --- Embeddings (local) ------------------------------------------------
     embedding_provider: EmbeddingProvider = EmbeddingProvider.FASTEMBED
@@ -146,10 +171,15 @@ class Settings(BaseSettings):
         if self.admin_password is not None and not self.admin_password.get_secret_value().strip():
             self.admin_password = None
 
+        if (self.local_llm_server is None) != (self.local_llm_model is None):
+            raise ValueError(
+                "Set both LOCAL_LLM_SERVER and LOCAL_LLM_MODEL to use a local model, or neither."
+            )
+
         # Relative paths in .env are relative to the project root, not the working directory.
-        for field in _PATH_FIELDS:
+        for field in (*_PATH_FIELDS, "local_llm_server", "local_llm_model"):
             path = getattr(self, field)
-            if not path.is_absolute():
+            if path is not None and not path.is_absolute():
                 setattr(self, field, PROJECT_ROOT / path)
 
         self.allowed_extensions = {
@@ -168,9 +198,22 @@ class Settings(BaseSettings):
         return self.max_upload_size_mb * 1024 * 1024
 
     @property
+    def local_model_id(self) -> str | None:
+        """Model ID of the local model, or None if none is configured."""
+        if self.local_llm_model is None:
+            return None
+        return LOCAL_MODEL_PREFIX + self.local_llm_model.stem
+
+    @property
+    def local_llm_base_url(self) -> str:
+        """OpenAI-compatible endpoint of the local model server."""
+        return f"http://{LOCAL_LLM_HOST}:{self.local_llm_port}/v1"
+
+    @property
     def available_models(self) -> list[str]:
-        """Chat models the admin can choose from."""
-        return list(self.groq_models)
+        """Chat models the admin can choose from: the Groq models, then the local one."""
+        local = [self.local_model_id] if self.local_model_id else []
+        return [*self.groq_models, *local]
 
     @property
     def default_model(self) -> str:
