@@ -137,7 +137,7 @@ Innovatech-AI-Assisstant/
 │   ├── confidential_documents.json  # which documents are confidential (git-ignored)
 │   ├── models/                # downloaded embedding model (git-ignored)
 │   └── logs/                  # llama-server output (git-ignored)
-├── docs/requirement_analysis.md  # original requirements specification (SRS)
+├── docs/requirement_analysis.md  # requirements specification (SRS) with implementation status
 ├── .env.example
 └── requirements.txt
 ```
