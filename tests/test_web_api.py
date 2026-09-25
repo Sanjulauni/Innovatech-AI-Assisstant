@@ -250,13 +250,15 @@ def test_chat_stream_llm_failure_mid_answer_sends_error_event(settings, reposito
     assert "unavailable" in events[-1]["message"]
 
 
-# --- /api prefix and legacy paths -----------------------------------------------------------
+# --- /api prefix ----------------------------------------------------------------------------
 
 
-def test_api_and_legacy_paths_both_work(client):
+def test_endpoints_are_only_served_under_api(client):
     assert client.get("/api/health").status_code == 200
-    assert client.get("/health").status_code == 200
     assert client.post("/api/chat", json={"question": "Hi?"}).status_code == 200
+    # Without the prefix there is no endpoint (and no built web app in this test).
+    assert client.get("/health").status_code == 404
+    assert client.post("/chat", json={"question": "Hi?"}).status_code == 405
 
 
 # --- Serving the React app ----------------------------------------------------------------

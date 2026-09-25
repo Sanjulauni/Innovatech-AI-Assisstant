@@ -107,7 +107,7 @@ def password_matches(services: Services, password: str | None) -> bool:
 def require_admin(
     request: Request, services: ServicesDep, x_admin_password: AdminPasswordHeader = None
 ) -> None:
-    """Allow the request with a valid session cookie (web app) or password header."""
+    """Allow the request with a valid session cookie (web app) or password header (scripts)."""
     ensure_admin_enabled(services)
     if services.sessions.verify(request.cookies.get(SESSION_COOKIE)):
         return

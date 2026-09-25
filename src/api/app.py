@@ -2,8 +2,7 @@
 
 Run with ``uvicorn src.api.app:app`` or ``python -m src.api.app``.
 
-The endpoints are served twice: under ``/api`` for the React web app, and at the
-root for the Streamlit UI (until it is retired). If the React app has been built
+The endpoints are served under ``/api``. If the React app has been built
 (``frontend/dist``), it is served too, so one server hosts everything.
 """
 
@@ -48,9 +47,6 @@ def create_app(services: Services | None = None) -> FastAPI:
     app.state.services = services
     for router in _ROUTERS:
         app.include_router(router, prefix=API_PREFIX)
-    for router in _ROUTERS:
-        # Legacy paths used by the Streamlit UI; hidden from the docs.
-        app.include_router(router, include_in_schema=False)
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:

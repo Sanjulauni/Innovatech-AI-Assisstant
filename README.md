@@ -55,9 +55,8 @@
 The application follows the standard Software Development Life Cycle (SDLC) tailored for AI systems, adhering strictly to **Object-Oriented Programming (OOP)** and enterprise design patterns.
 
 ```text
- [React web app (Vite)]        [Streamlit UI (legacy)]
-            │                           │
-            └─────────────┬─────────────┘
+                [React web app (Vite)]
+                          │
                           ▼
               [REST API layer (FastAPI)]
        /api/chat · /api/chat/stream · /api/admin/*
@@ -80,7 +79,7 @@ The application follows the standard Software Development Life Cycle (SDLC) tail
 
 | Layer | Package | Responsibility |
 |---|---|---|
-| Presentation | `frontend/` (React), `src/ui/` (Streamlit) | Chat and admin interfaces |
+| Presentation | `frontend/` (React) | Chat and admin interfaces |
 | API | `src/api/` | REST endpoints, validation, auth, error handling |
 | Business logic | `src/rag_engine/` | Retrieval, prompts, model selection, answer generation |
 | Data | `src/data_pipeline/` | Loading, chunking, embedding, vector store |
@@ -115,8 +114,7 @@ innovatech-rag-assistant/
 │   ├── model_factory.py       # Groq chat models, local embeddings
 │   ├── api/                   # FastAPI app, routes, schemas, auth
 │   ├── rag_engine/            # RAG chain, prompts, retriever, model selector, instructions
-│   ├── data_pipeline/         # loaders, text splitter, vector store, ingestion
-│   └── ui/                    # Streamlit UI (legacy)
+│   └── data_pipeline/         # loaders, text splitter, vector store, ingestion
 ├── frontend/                  # React web app (Vite)
 ├── tests/                     # pytest suite (fake models, no API calls)
 ├── data/
@@ -250,8 +248,7 @@ All settings live in `.env` (see `.env.example` for the full list).
 
 ## 🔌 API
 
-Interactive docs: `/docs`. All endpoints are also available without the `/api` prefix
-(used by the Streamlit UI).
+Interactive docs: `/docs`.
 
 | Method | Endpoint | Who | Purpose |
 |---|---|---|---|

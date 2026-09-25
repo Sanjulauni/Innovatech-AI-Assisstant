@@ -16,6 +16,8 @@ from tests.fakes import BrokenChatModel, RecordingChatModel
 
 PASSWORD = "correct horse battery staple"
 ADMIN = {ADMIN_HEADER: PASSWORD}
+# Requests like client.get("/health") go to /api/health.
+API_URL = "http://testserver/api"
 
 
 @pytest.fixture
@@ -40,7 +42,7 @@ def make_client(settings, repository, llm):
     services = build_services(
         settings, embeddings=DeterministicFakeEmbedding(size=64), llm=llm, repository=repository
     )
-    return TestClient(create_app(services))
+    return TestClient(create_app(services), base_url=API_URL)
 
 
 @pytest.fixture
@@ -79,10 +81,10 @@ def test_health_reports_vector_store_error(client, repository, monkeypatch):
 
 
 def test_openapi_docs_available(client):
-    assert client.get("/docs").status_code == 200
-    paths = client.get("/openapi.json").json()["paths"]
+    assert client.get("http://testserver/docs").status_code == 200
+    paths = client.get("http://testserver/openapi.json").json()["paths"]
     assert {"/api/chat", "/api/chat/stream", "/api/health", "/api/admin/login"} <= set(paths)
-    assert "/chat" not in paths  # legacy Streamlit paths are hidden
+    assert all(path.startswith("/api/") for path in paths)
 
 
 # --- Chat ------------------------------------------------------------------------
@@ -353,7 +355,7 @@ def test_instructions_reject_too_long_text(client):
 
 def test_unexpected_errors_do_not_leak_details(settings, repository, llm, monkeypatch):
     client = make_client(settings, repository, llm)
-    client = TestClient(client.app, raise_server_exceptions=False)
+    client = TestClient(client.app, base_url=API_URL, raise_server_exceptions=False)
 
     def fail():
         raise RuntimeError("secret internal path C:/data/raw")
@@ -377,7 +379,7 @@ def test_startup_builds_services_from_settings(settings, repository, llm, monkey
     monkeypatch.setattr(app_module, "get_settings", lambda: settings)
     monkeypatch.setattr(app_module, "build_services", fake_build)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), base_url=API_URL) as client:
         assert client.get("/health").status_code == 200
     assert built == [settings]
 

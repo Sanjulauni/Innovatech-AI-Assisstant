@@ -2,7 +2,8 @@
 
 Employee endpoints: ``POST /chat``, ``POST /chat/stream``, ``GET /health``.
 Admin endpoints: everything under ``/admin``. They accept either the session cookie
-set by ``POST /admin/login`` (web app) or the ``X-Admin-Password`` header (Streamlit).
+set by ``POST /admin/login`` (web app) or the ``X-Admin-Password`` header (scripts).
+All paths here are served under ``/api`` (see ``app.py``).
 
 Blocking work (embedding, LLM calls) runs in FastAPI's thread pool: endpoints are
 plain ``def`` functions, and the upload endpoint uses ``run_in_threadpool``.

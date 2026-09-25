@@ -192,15 +192,6 @@ class Settings(BaseSettings):
         return name[:63].rstrip("-_")  # ChromaDB: max 63 chars, must end alphanumeric
 
 
-class UISettings(BaseSettings):
-    """The few settings the Streamlit UI needs. It never needs an API key."""
-
-    model_config = _ENV_CONFIG
-
-    api_base_url: str = "http://127.0.0.1:8000"
-    request_timeout_seconds: float = Field(default=120.0, gt=0)
-
-
 @lru_cache
 def get_settings() -> Settings:
     """Return the shared settings instance (Singleton)."""
