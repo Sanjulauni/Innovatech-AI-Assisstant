@@ -12,6 +12,10 @@ export interface Message {
   sources?: Source[];
   status: MessageStatus;
   error?: string;
+  /** Answered by the local model (known once the documents are searched). */
+  local?: boolean;
+  /** Based on confidential documents: answered locally, kept out of cloud prompts. */
+  private?: boolean;
 }
 
 const STORAGE_KEY = "innovatech.chat";
@@ -41,7 +45,11 @@ const newId = () => `${Date.now().toString(36)}-${(counter++).toString(36)}`;
 function historyOf(messages: Message[]): ChatMessageIn[] {
   return messages
     .filter((m) => m.status !== "error" && m.content.trim())
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(m.private ? { confidential: true } : {}),
+    }));
 }
 
 /** Chat state for this browser tab: messages, streaming, stop, retry and clear. */
@@ -76,12 +84,15 @@ export function useChat() {
           text,
           historyOf(previous),
           (event) => {
-            if (event.type === "token") {
+            if (event.type === "route") {
+              update(assistantId, () => ({ local: event.local, private: event.private }));
+            } else if (event.type === "token") {
               update(assistantId, (m) => ({ content: m.content + event.text }));
             } else if (event.type === "done") {
               update(assistantId, () => ({
                 content: event.answer,
                 sources: event.sources,
+                private: event.private,
                 status: "done",
               }));
             } else {

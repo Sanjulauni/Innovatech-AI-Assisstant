@@ -24,8 +24,10 @@ def clean_env(monkeypatch):
 def make_settings(**overrides) -> Settings:
     """Build settings from explicit values only, ignoring the real .env file."""
     overrides.setdefault("groq_api_key", "test-key")
-    # Never read or write the real data/upload_limit.json.
-    overrides.setdefault("upload_limit_file", Path(tempfile.mkdtemp()) / "upload_limit.json")
+    # Never read or write the real data/upload_limit.json or confidential list.
+    tmp = Path(tempfile.mkdtemp())
+    overrides.setdefault("upload_limit_file", tmp / "upload_limit.json")
+    overrides.setdefault("confidential_file", tmp / "confidential_documents.json")
     return Settings(_env_file=None, **overrides)
 
 

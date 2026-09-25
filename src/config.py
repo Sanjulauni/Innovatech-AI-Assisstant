@@ -54,6 +54,7 @@ _PATH_FIELDS = (
     "instructions_file",
     "model_selection_file",
     "upload_limit_file",
+    "confidential_file",
     "local_llm_log_file",
     "embedding_cache_dir",
     "frontend_dist_dir",
@@ -97,6 +98,9 @@ class Settings(BaseSettings):
     local_llm_top_k: int = Field(default=2, gt=0)
     local_llm_history_limit: int = Field(default=2, ge=0)
     local_llm_log_file: Path = PROJECT_ROOT / "data" / "logs" / "llama-server.log"
+    # When the local model was started only to answer a confidential question (another
+    # model is selected), stop it after this many idle minutes to free its memory.
+    local_llm_idle_minutes: float = Field(default=15, gt=0)
 
     # --- Embeddings (local) ------------------------------------------------
     embedding_provider: EmbeddingProvider = EmbeddingProvider.FASTEMBED
@@ -111,6 +115,8 @@ class Settings(BaseSettings):
     instructions_file: Path = PROJECT_ROOT / "data" / "agent_instructions.json"
     # The chat model the admin selected.
     model_selection_file: Path = PROJECT_ROOT / "data" / "model_selection.json"
+    # Documents the admin marked confidential: only the local model may read them.
+    confidential_file: Path = PROJECT_ROOT / "data" / "confidential_documents.json"
 
     # --- Ingestion ---------------------------------------------------------
     chunk_size: int = Field(default=1000, gt=0)

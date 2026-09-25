@@ -214,8 +214,9 @@ def test_chat_stream_sends_tokens_then_done(client):
 def test_chat_stream_empty_knowledge_base(client):
     events = stream_events(client.post("/api/chat/stream", json={"question": "Hi?"}))
     assert events == [
+        {"type": "route", "local": False, "private": False},
         {"type": "token", "text": NOT_FOUND_MESSAGE},
-        {"type": "done", "answer": NOT_FOUND_MESSAGE, "sources": []},
+        {"type": "done", "answer": NOT_FOUND_MESSAGE, "sources": [], "private": False},
     ]
 
 
@@ -233,15 +234,17 @@ def test_chat_stream_retrieval_failure_is_503(client, repository, monkeypatch):
     assert response.status_code == 503
 
 
-def test_chat_stream_llm_failure_before_text_is_503(settings, repository):
+def test_chat_stream_llm_failure_before_text_sends_error_event(settings, repository):
+    # The stream starts once the documents are searched (with the route event), so a
+    # model that fails before writing anything is reported as an error event.
     client = make_client(settings, repository, BrokenChatModel(responses=["x"]))
     login(client)
     upload(client)
 
-    response = client.post("/api/chat/stream", json={"question": "Leave?"})
+    events = stream_events(client.post("/api/chat/stream", json={"question": "Leave?"}))
 
-    assert response.status_code == 503
-    assert "unavailable" in response.json()["detail"]
+    assert [e["type"] for e in events] == ["route", "error"]
+    assert "unavailable" in events[-1]["message"]
 
 
 def test_chat_stream_llm_failure_mid_answer_sends_error_event(settings, repository):
@@ -251,7 +254,7 @@ def test_chat_stream_llm_failure_mid_answer_sends_error_event(settings, reposito
 
     events = stream_events(client.post("/api/chat/stream", json={"question": "Leave?"}))
 
-    assert [e["type"] for e in events] == ["token", "token", "token", "error"]
+    assert [e["type"] for e in events] == ["route", "token", "token", "token", "error"]
     assert "unavailable" in events[-1]["message"]
 
 
@@ -381,3 +384,129 @@ def test_api_start_and_stop_manage_the_saved_local_model(settings, repository, t
     with make_local_client(settings, repository, tmp_path, restarted):
         assert restarted.calls == ["start"]  # loading begins at startup
     assert restarted.calls == ["start", "stop"]  # and the server is stopped at shutdown
+
+
+# --- Confidential documents --------------------------------------------------------------
+
+SOP_TEXT = b"Server restart SOP: stop the queue, then reboot."
+UNKNOWN_DOC_URL = f"/api/admin/documents/{'c' * 64}/confidential"
+
+
+def upload_confidential(client, name="sop.md", content=SOP_TEXT):
+    return client.post(
+        "/api/admin/documents", files={"file": (name, content)}, data={"confidential": "true"}
+    )
+
+
+def test_upload_can_mark_a_document_confidential(client):
+    login(client)
+
+    response = upload_confidential(client)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["confidential"] is True
+    assert body["message"].endswith("Marked as confidential.")
+    documents = {d["source"]: d for d in client.get("/api/admin/documents").json()}
+    assert documents["sop.md"]["confidential"] is True
+
+
+def test_documents_are_not_confidential_by_default(client):
+    login(client)
+    assert upload(client).json()["confidential"] is False
+    assert client.get("/api/admin/documents").json()[0]["confidential"] is False
+
+
+def test_toggle_confidential(client):
+    login(client)
+    doc_id = upload(client).json()["doc_id"]
+    url = f"/api/admin/documents/{doc_id}/confidential"
+
+    marked = client.put(url, json={"confidential": True})
+    assert marked.status_code == 200 and marked.json()["confidential"] is True
+    assert client.get("/api/admin/documents").json()[0]["confidential"] is True
+
+    unmarked = client.put(url, json={"confidential": False}).json()
+    assert unmarked["confidential"] is False
+
+
+def test_toggle_unknown_document_is_404(client):
+    login(client)
+    response = client.put(UNKNOWN_DOC_URL, json={"confidential": True})
+    assert response.status_code == 404
+
+
+def test_toggle_needs_admin(client):
+    response = client.put(UNKNOWN_DOC_URL, json={"confidential": True})
+    assert response.status_code == 401
+
+
+def test_deleting_a_document_forgets_its_mark(client):
+    login(client)
+    doc_id = upload_confidential(client).json()["doc_id"]
+
+    client.delete(f"/api/admin/documents/{doc_id}")
+
+    # Uploading the same file again, without the flag, is a normal document.
+    assert upload(client, "sop.md", SOP_TEXT).json()["confidential"] is False
+
+
+def test_failed_confidential_upload_leaves_no_mark(client):
+    login(client)
+    assert upload_confidential(client, "empty.md", b"   ").status_code == 422
+    assert client.app.state.services.confidential.ids() == frozenset()
+
+
+def test_reuploading_with_the_flag_marks_the_existing_document(client):
+    login(client)
+    upload(client, "sop.md", SOP_TEXT)
+
+    response = upload_confidential(client)
+
+    assert response.status_code == 200  # duplicate
+    assert response.json()["confidential"] is True
+
+
+def test_confidential_question_without_a_local_model_is_refused(client):
+    login(client)
+    upload_confidential(client)
+
+    response = client.post("/api/chat", json={"question": "What is the restart SOP?"})
+
+    assert response.status_code == 503
+    assert "no local model is set up" in response.json()["detail"]
+
+
+def test_confidential_question_is_answered_privately_by_the_local_model(
+    settings, repository, tmp_path
+):
+    server = StubLocalServer()
+    client = make_local_client(settings, repository, tmp_path, server)
+    login(client)
+    upload_confidential(client)
+
+    events = stream_events(
+        client.post("/api/chat/stream", json={"question": "What is the restart SOP?"})
+    )
+
+    assert events[0] == {"type": "route", "local": True, "private": True}
+    assert events[-1]["type"] == "done"
+    assert events[-1]["private"] is True
+    assert events[-1]["sources"][0]["confidential"] is True
+    assert server.calls == ["wait"]  # started on demand; the cloud model stays selected
+
+
+def test_history_carries_the_confidential_flag(settings, repository, tmp_path):
+    llm = RecordingChatModel(responses=["Leave is 14 days [1]."])
+    client = make_client(settings, repository, llm)
+    login(client)
+    upload(client)
+    history = [
+        {"role": "user", "content": "Restart SOP?"},
+        {"role": "assistant", "content": "Stop the queue [1].", "confidential": True},
+    ]
+
+    client.post("/api/chat", json={"question": "How much leave?", "history": history})
+
+    sent = "\n".join(m.content for m in llm.prompts[-1])
+    assert "Stop the queue" not in sent and "Restart SOP?" not in sent

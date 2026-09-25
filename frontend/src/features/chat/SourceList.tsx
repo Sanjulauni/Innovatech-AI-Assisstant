@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ChevronDown, FileText } from "lucide-react";
+import { ChevronDown, FileText, Lock } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import type { Source } from "../../lib/types";
@@ -56,6 +56,12 @@ export function SourceList({ sources, open, onToggle, highlighted }: Props) {
                 </span>
                 <FileText className="size-4 shrink-0 text-slate-400" aria-hidden />
                 <span className="truncate">{source.source}</span>
+                {source.confidential && (
+                  <span className="inline-flex shrink-0 items-center gap-1 text-xs font-normal text-emerald-700 dark:text-emerald-400">
+                    <Lock className="size-3" aria-hidden />
+                    Confidential
+                  </span>
+                )}
                 {source.page !== null && (
                   <span className="shrink-0 text-xs font-normal text-slate-500 dark:text-slate-400">
                     page {source.page}

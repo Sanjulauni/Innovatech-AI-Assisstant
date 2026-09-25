@@ -120,11 +120,18 @@ export async function checkSession(): Promise<boolean> {
 
 export const listDocuments = () => json<StoredDocument[]>("/admin/documents");
 
-export function uploadDocument(file: File): Promise<UploadResult> {
+export function uploadDocument(file: File, confidential = false): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
+  if (confidential) form.append("confidential", "true");
   return json<UploadResult>("/admin/documents", { method: "POST", body: form });
 }
+
+export const setConfidential = (docId: string, confidential: boolean) =>
+  json<StoredDocument>(
+    `/admin/documents/${encodeURIComponent(docId)}/confidential`,
+    jsonBody("PUT", { confidential }),
+  );
 
 export const deleteDocument = (docId: string) =>
   send(`/admin/documents/${encodeURIComponent(docId)}`, { method: "DELETE" }).then(() => undefined);

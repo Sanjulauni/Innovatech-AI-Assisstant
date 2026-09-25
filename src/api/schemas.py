@@ -21,6 +21,11 @@ MAX_MESSAGE_LENGTH = 8000
 class ChatMessageIn(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(max_length=MAX_MESSAGE_LENGTH)
+    confidential: bool = Field(
+        default=False,
+        description="An earlier answer based on confidential documents (from `private` in "
+        "the response). It is never sent to a cloud model.",
+    )
 
 
 class ChatRequest(BaseModel):
@@ -39,11 +44,16 @@ class SourceOut(BaseModel):
     page: int | None = None
     snippet: str
     score: float
+    confidential: bool = Field(default=False, description="From a confidential document.")
 
 
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceOut]
+    private: bool = Field(
+        default=False,
+        description="Answered by the local model because confidential documents were used.",
+    )
 
 
 # --- Health --------------------------------------------------------------------
@@ -76,6 +86,11 @@ class DocumentOut(BaseModel):
     source: str
     chunk_count: int
     ingested_at: str
+    confidential: bool = Field(description="Only the local model may read it.")
+
+
+class ConfidentialIn(BaseModel):
+    confidential: bool
 
 
 class UploadResponse(BaseModel):
@@ -83,6 +98,7 @@ class UploadResponse(BaseModel):
     source: str
     status: IngestionStatus
     chunk_count: int
+    confidential: bool
     message: str
 
 

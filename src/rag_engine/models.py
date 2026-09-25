@@ -14,6 +14,8 @@ class ChatMessage:
 
     role: Role
     content: str
+    # An answer based on confidential documents; never sent to a cloud model.
+    confidential: bool = False
 
 
 @dataclass(frozen=True)
@@ -26,9 +28,20 @@ class Source:
     page: int | None
     snippet: str
     score: float
+    confidential: bool = False
+
+
+@dataclass(frozen=True)
+class Route:
+    """Which model answers a question, decided after the documents are searched."""
+
+    local: bool  # answered by the local model
+    private: bool  # because it draws on confidential documents
 
 
 @dataclass(frozen=True)
 class Answer:
     answer: str
     sources: list[Source] = field(default_factory=list)
+    # Answered by the local model because confidential documents were involved.
+    private: bool = False

@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   callsTo,
-  HEALTH,
   jsonResponse,
   mockApi,
   ndjson,
@@ -159,29 +158,72 @@ describe("ChatPage", () => {
     expect(screen.getByText("How can I help?")).toBeInTheDocument();
   });
 
+  /** A stream the test feeds event by event. */
+  function controlledStream() {
+    const encoder = new TextEncoder();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) });
+    return {
+      response: new Response(body, { headers: { "Content-Type": "application/x-ndjson" } }),
+      send: (...events: object[]) => {
+        for (const line of ndjson(...events)) controller.enqueue(encoder.encode(line));
+      },
+      end: () => controller.close(),
+    };
+  }
+
   it.each([
-    ["local", true],
-    ["groq", false],
-  ])("while the %s model reads the question, explains the wait: %s", async (provider, shown) => {
-    let finish = () => {};
-    mockApi({
-      "GET /health": () => jsonResponse({ ...HEALTH, llm_provider: provider }),
-      "POST /chat/stream": () =>
-        new Promise<Response>((resolve) => {
-          finish = () => resolve(answerStream());
-        }),
-    });
+    [true, true],
+    [false, false],
+  ])("while a local model (%s) reads the question, explains the wait: %s", async (local, shown) => {
+    const stream = controlledStream();
+    mockApi({ "POST /chat/stream": () => stream.response });
     renderApp();
-    await screen.findByTitle(/Model:/); // health has loaded
     await ask("How much leave?");
 
+    stream.send({ type: "route", local, private: false });
     expect(await screen.findByText("Searching the documents…")).toBeInTheDocument();
-    const hint = screen.queryByText(/first words can take about a minute/);
-    expect(hint !== null).toBe(shown);
+    await waitFor(() =>
+      expect(screen.queryByText(/first words can take about a minute/) !== null).toBe(shown),
+    );
 
-    finish();
+    stream.send({ type: "done", answer: "You get **18 days** [1].", sources: [SOURCE], private: false });
+    stream.end();
     expect(await screen.findByText("18 days")).toBeInTheDocument();
     expect(screen.queryByText(/first words can take about a minute/)).not.toBeInTheDocument();
+  });
+
+  it("marks answers based on confidential documents and keeps them out of cloud history", async () => {
+    const confidentialSource = { ...SOURCE, source: "Restart_SOP.pdf", confidential: true };
+    let calls = 0;
+    const fetchMock = mockApi({
+      "POST /chat/stream": () => {
+        calls += 1;
+        return calls === 1
+          ? streamResponse(
+              ndjson(
+                { type: "route", local: true, private: true },
+                { type: "token", text: "Stop the queue [1]." },
+                { type: "done", answer: "Stop the queue [1].", sources: [confidentialSource], private: true },
+              ),
+            )
+          : answerStream();
+      },
+    });
+    renderApp();
+    const user = await ask("How do I restart the server?");
+
+    expect(await screen.findByText(/answered privately by the local model/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /1 source/ }));
+    expect(within(screen.getByRole("listitem")).getByText("Confidential")).toBeInTheDocument();
+
+    await ask("And the leave policy?");
+    await screen.findByText("18 days");
+    const [, second] = callsTo(fetchMock, "POST", "/chat/stream") as { history: object[] }[];
+    expect(second.history).toEqual([
+      { role: "user", content: "How do I restart the server?" },
+      { role: "assistant", content: "Stop the queue [1].", confidential: true },
+    ]);
   });
 
   it("shows server status in the header", async () => {

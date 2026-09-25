@@ -1,10 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bot, RotateCcw } from "lucide-react";
+import { Bot, Lock, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import { Alert, Button } from "../../components/ui";
-import { getHealth } from "../../lib/api";
 import { AnswerMarkdown } from "./AnswerMarkdown";
 import { SourceList } from "./SourceList";
 import type { Message } from "./useChat";
@@ -17,9 +15,6 @@ interface Props {
 export function MessageItem({ message, onRetry }: Props) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [highlighted, setHighlighted] = useState<number | null>(null);
-  // Shares the header's cached health; tells us whether the local model is answering.
-  const health = useQuery({ queryKey: ["health"], queryFn: getHealth });
-  const localModel = health.data?.llm_provider === "local";
 
   if (message.role === "user") {
     return (
@@ -62,7 +57,13 @@ export function MessageItem({ message, onRetry }: Props) {
             </span>
           </div>
         ) : null}
-        {streaming && !message.content && localModel && (
+        {message.private && (
+          <p className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900/60">
+            <Lock className="size-3" aria-hidden />
+            Uses confidential documents, so it was answered privately by the local model
+          </p>
+        )}
+        {streaming && !message.content && message.local && (
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             The local model runs on this computer, so the first words can take about a minute.
           </p>

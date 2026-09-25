@@ -21,6 +21,7 @@ from fastapi import (
     Body,
     Depends,
     File,
+    Form,
     HTTPException,
     Path,
     Request,
@@ -42,6 +43,7 @@ from src.api.dependencies import (
 from src.api.schemas import (
     ChatRequest,
     ChatResponse,
+    ConfidentialIn,
     DocumentOut,
     HealthResponse,
     InstructionsIn,
@@ -62,9 +64,11 @@ from src.data_pipeline.ingestion import (
     IngestionError,
     IngestionStatus,
     UnsupportedTypeError,
+    compute_doc_id,
 )
+from src.data_pipeline.vector_store import StoredDocument
 from src.rag_engine.llm_chain import ServiceUnavailableError
-from src.rag_engine.models import Answer, ChatMessage
+from src.rag_engine.models import Answer, ChatMessage, Route
 
 logger = logging.getLogger(__name__)
 
@@ -100,13 +104,17 @@ def health(services: ServicesDep) -> HealthResponse:
 
 
 def _history(request: ChatRequest) -> list[ChatMessage]:
-    return [ChatMessage(role=m.role, content=m.content) for m in request.history]
+    return [
+        ChatMessage(role=m.role, content=m.content, confidential=m.confidential)
+        for m in request.history
+    ]
 
 
 def _response(answer: Answer) -> ChatResponse:
     return ChatResponse(
         answer=answer.answer,
         sources=[SourceOut(**vars(source)) for source in answer.sources],
+        private=answer.private,
     )
 
 
@@ -125,7 +133,9 @@ def _line(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
 
 
-def _event(item: str | Answer) -> str:
+def _event(item: Route | str | Answer) -> str:
+    if isinstance(item, Route):
+        return _line({"type": "route", "local": item.local, "private": item.private})
     if isinstance(item, Answer):
         return _line({"type": "done", **_response(item).model_dump()})
     return _line({"type": "token", "text": item})
@@ -137,9 +147,10 @@ def _event(item: str | Answer) -> str:
     responses={
         200: {
             "content": {"application/x-ndjson": {}},
-            "description": "One JSON object per line: `token` events with a piece of the "
-            "answer, then a `done` event with the full answer and sources, or an `error` "
-            "event if the model fails part-way.",
+            "description": "One JSON object per line: a `route` event saying which model "
+            "answers (`local`) and whether confidential documents are involved (`private`), "
+            "then `token` events with pieces of the answer, then a `done` event with the "
+            "full answer and sources, or an `error` event if the model fails part-way.",
         }
     },
 )
@@ -231,14 +242,19 @@ def session() -> LoginResponse:
 # --- Admin documents -----------------------------------------------------------
 
 
+def _document_out(document: StoredDocument, services: ServicesDep) -> DocumentOut:
+    return DocumentOut(
+        doc_id=document.doc_id,
+        source=document.source,
+        chunk_count=document.chunk_count,
+        ingested_at=document.ingested_at,
+        confidential=services.confidential.is_confidential(document.doc_id),
+    )
+
+
 @admin_router.get("/documents", response_model=list[DocumentOut])
 def list_documents(services: ServicesDep) -> list[DocumentOut]:
-    return [
-        DocumentOut(
-            doc_id=d.doc_id, source=d.source, chunk_count=d.chunk_count, ingested_at=d.ingested_at
-        )
-        for d in services.repository.list_documents()
-    ]
+    return [_document_out(d, services) for d in services.repository.list_documents()]
 
 
 @admin_router.post(
@@ -251,12 +267,22 @@ async def upload_document(
     services: ServicesDep,
     response: Response,
     file: Annotated[UploadFile, File(description="PDF, DOCX, TXT or MD file.")],
+    confidential: Annotated[
+        bool, Form(description="Only the local model may read this document.")
+    ] = False,
 ) -> UploadResponse:
     limit = services.ingestion.max_size_bytes
     content = await file.read(limit + 1)  # one extra byte is enough to detect "too large"
     filename = file.filename or ""
+    # Mark it before indexing, so no question can reach it as a normal document.
+    doc_id = compute_doc_id(content)
+    newly_marked = confidential and not services.confidential.is_confidential(doc_id)
+    if newly_marked:
+        services.confidential.set(doc_id, True)
+    indexed = False
     try:
         result = await run_in_threadpool(services.ingestion.ingest_upload, filename, content)
+        indexed = True
     except UnsupportedTypeError as exc:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)) from exc
     except FileTooLargeError as exc:
@@ -272,17 +298,23 @@ async def upload_document(
             "Please try again shortly; if it keeps failing, check the server logs."
         )
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail) from exc
+    finally:
+        if newly_marked and not indexed:
+            services.confidential.set(doc_id, False)  # nothing was added after all
 
     if result.status is IngestionStatus.DUPLICATE:
         response.status_code = status.HTTP_200_OK
         message = f"'{result.source}' is already in the knowledge base; skipped."
     else:
         message = f"Indexed '{result.source}' ({result.chunk_count} chunks)."
+    if newly_marked:
+        message += " Marked as confidential."
     return UploadResponse(
         doc_id=result.doc_id,
         source=result.source,
         status=result.status,
         chunk_count=result.chunk_count,
+        confidential=services.confidential.is_confidential(result.doc_id),
         message=message,
     )
 
@@ -300,7 +332,20 @@ def reindex_documents(services: ServicesDep) -> ReindexResponse:
 def delete_document(doc_id: DocId, services: ServicesDep) -> Response:
     if not services.ingestion.delete(doc_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found.")
+    services.confidential.set(doc_id, False)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@admin_router.put("/documents/{doc_id}/confidential", response_model=DocumentOut)
+def set_confidential(doc_id: DocId, body: ConfidentialIn, services: ServicesDep) -> DocumentOut:
+    """Mark a document as confidential (only the local model may read it), or unmark it.
+
+    It applies from the next question on."""
+    document = services.repository.get_document(doc_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found.")
+    services.confidential.set(doc_id, body.confidential)
+    return _document_out(document, services)
 
 
 # --- Admin upload limit --------------------------------------------------------

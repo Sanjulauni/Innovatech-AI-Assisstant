@@ -127,7 +127,7 @@ def test_chat_sends_history_and_admin_instructions(client, llm):
 
 def test_chat_with_empty_knowledge_base(client, llm):
     body = client.post("/chat", json={"question": "Anything?"}).json()
-    assert body == {"answer": NOT_FOUND_MESSAGE, "sources": []}
+    assert body == {"answer": NOT_FOUND_MESSAGE, "sources": [], "private": False}
     assert llm.prompts == []
 
 

@@ -16,7 +16,7 @@ from src.rag_engine.llm_chain import (
     normalize_citations,
 )
 from src.rag_engine.model_selector import LocalModel, ModelSelector
-from src.rag_engine.models import ChatMessage
+from src.rag_engine.models import ChatMessage, Route
 from src.rag_engine.prompts import (
     NOT_FOUND_MESSAGE,
     SYSTEM_RULES,
@@ -316,8 +316,9 @@ def test_chain_from_settings(repository):
 
 
 def collect(stream):
-    items = list(stream)
-    *pieces, answer = items
+    """The text pieces and the final answer; checks the stream starts with its route."""
+    route, *pieces, answer = list(stream)
+    assert isinstance(route, Route)
     return pieces, answer
 
 

@@ -15,6 +15,7 @@ from langchain_core.embeddings import Embeddings
 
 from src.api.auth import SESSION_COOKIE, LoginRateLimiter, SessionManager
 from src.config import Settings
+from src.data_pipeline.confidential import ConfidentialStore
 from src.data_pipeline.ingestion import IngestionService
 from src.data_pipeline.upload_limit import UploadLimit
 from src.data_pipeline.vector_store import VectorStoreRepository
@@ -37,6 +38,7 @@ class Services:
     chain: RAGChain
     models: ModelSelector
     upload_limit: UploadLimit
+    confidential: ConfidentialStore
     sessions: SessionManager
     login_limiter: LoginRateLimiter
 
@@ -61,10 +63,16 @@ def build_services(
         factory=(lambda _model: llm) if llm else (lambda model: LLMFactory.create(settings, model)),
         store_path=settings.model_selection_file,
         local=_local_model(settings, local_server),
+        idle_seconds=settings.local_llm_idle_minutes * 60,
     )
     upload_limit = UploadLimit.from_settings(settings)
+    confidential = ConfidentialStore.from_settings(settings)
     chain = RAGChain.from_settings(
-        DocumentRetriever.from_settings(repository, settings), models, instructions, settings
+        DocumentRetriever.from_settings(repository, settings),
+        models,
+        instructions,
+        settings,
+        confidential=confidential,
     )
     return Services(
         settings=settings,
@@ -76,6 +84,7 @@ def build_services(
         chain=chain,
         models=models,
         upload_limit=upload_limit,
+        confidential=confidential,
         sessions=SessionManager(ttl_seconds=int(settings.admin_session_hours * 3600)),
         login_limiter=LoginRateLimiter(),
     )

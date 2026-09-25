@@ -5,6 +5,8 @@ export type Role = "user" | "assistant";
 export interface ChatMessageIn {
   role: Role;
   content: string;
+  /** An earlier answer based on confidential documents; never sent to a cloud model. */
+  confidential?: boolean;
 }
 
 export interface Source {
@@ -14,14 +16,20 @@ export interface Source {
   page: number | null;
   snippet: string;
   score: number;
+  /** From a document the admin marked confidential. */
+  confidential: boolean;
 }
 
 export interface ChatResponse {
   answer: string;
   sources: Source[];
+  /** Answered by the local model because confidential documents were used. */
+  private: boolean;
 }
 
 export type StreamEvent =
+  /** First event: which model answers, and whether confidential documents are involved. */
+  | { type: "route"; local: boolean; private: boolean }
   | { type: "token"; text: string }
   | ({ type: "done" } & ChatResponse)
   | { type: "error"; message: string };
@@ -41,6 +49,8 @@ export interface StoredDocument {
   source: string;
   chunk_count: number;
   ingested_at: string;
+  /** Only the local model may read it. */
+  confidential: boolean;
 }
 
 export interface UploadResult {
@@ -48,6 +58,7 @@ export interface UploadResult {
   source: string;
   status: "ingested" | "duplicate";
   chunk_count: number;
+  confidential: boolean;
   message: string;
 }
 

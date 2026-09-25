@@ -9,6 +9,7 @@ const DOC = {
   source: "Leave_Policy.txt",
   chunk_count: 3,
   ingested_at: "2026-09-23T08:00:00+00:00",
+  confidential: false,
 };
 
 const LIMIT = { max_upload_size_mb: 20, default_mb: 20, max_allowed_mb: 200 };
@@ -22,6 +23,7 @@ function loggedIn(documents = [DOC], extra = {}) {
     "GET /admin/documents": () => jsonResponse(documents),
     "GET /admin/instructions": () => jsonResponse({ text: "Be concise.", updated_at: null }),
     "GET /admin/upload-limit": () => jsonResponse(LIMIT),
+    "GET /admin/model": () => jsonResponse(MODELS),
     ...extra,
   });
 }
@@ -143,7 +145,7 @@ describe("Documents", () => {
 
     // The unsupported file never reached the server; the list refreshed.
     expect(callsTo(fetchMock, "POST", "/admin/documents")).toHaveLength(2);
-    expect(await screen.findByText("Remote.docx", { selector: "p.truncate.text-sm" })).toBeInTheDocument();
+    expect(await screen.findByText("Remote.docx", { selector: "span.truncate" })).toBeInTheDocument();
   });
 
   it("shows server-side upload errors", async () => {
@@ -464,6 +466,100 @@ describe("Local model", () => {
 
     expect(callsTo(fetchMock, "PUT", "/admin/model")).toEqual([{ model: LOCAL_ID }]);
     expect(await screen.findByText(/Loading Gemma 4 E2B/)).toBeInTheDocument();
+  });
+});
+
+describe("Confidential documents", () => {
+  const MODELS_WITH_LOCAL = { current: "openai/gpt-oss-120b", options: [{ kind: "local" }] };
+
+  it("uploads a document as confidential", async () => {
+    const fetchMock = loggedIn([], {
+      "GET /admin/model": () => jsonResponse(MODELS_WITH_LOCAL),
+      "POST /admin/documents": () =>
+        jsonResponse(
+          {
+            ...DOC,
+            source: "Restart_SOP.md",
+            status: "ingested",
+            confidential: true,
+            message: "Indexed 'Restart_SOP.md' (2 chunks). Marked as confidential.",
+          },
+          201,
+        ),
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await screen.findByText(/No documents yet/);
+    await user.click(screen.getByRole("checkbox", { name: /Confidential/ }));
+    await user.upload(screen.getByTestId("file-input"), new File(["SOP"], "Restart_SOP.md"));
+
+    expect(await screen.findByText(/Marked as confidential/)).toBeInTheDocument();
+    const [form] = callsTo(fetchMock, "POST", "/admin/documents") as FormData[];
+    expect(form.get("confidential")).toBe("true");
+  });
+
+  it("does not send the flag for normal uploads", async () => {
+    const fetchMock = loggedIn([], {
+      "POST /admin/documents": () =>
+        jsonResponse({ ...DOC, status: "ingested", confidential: false, message: "Indexed." }, 201),
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    await screen.findByText(/No documents yet/);
+    await user.upload(screen.getByTestId("file-input"), new File(["x"], "notes.md"));
+
+    await screen.findByText("Indexed.");
+    const [form] = callsTo(fetchMock, "POST", "/admin/documents") as FormData[];
+    expect(form.get("confidential")).toBeNull();
+  });
+
+  it("marks and unmarks a document from the list", async () => {
+    const documents = [{ ...DOC, confidential: false }];
+    const fetchMock = loggedIn(documents, {
+      "GET /admin/model": () => jsonResponse(MODELS_WITH_LOCAL),
+      [`PUT /admin/documents/${DOC.doc_id}/confidential`]: (_url: string, init: RequestInit) => {
+        documents[0] = { ...DOC, confidential: JSON.parse(init.body as string).confidential };
+        return jsonResponse(documents[0]);
+      },
+    });
+    renderApp("/admin");
+    const user = userEvent.setup();
+
+    const toggle = await screen.findByRole("button", { name: "Confidential: Leave_Policy.txt" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));
+    const row = toggle.closest("li") as HTMLElement;
+    expect(within(row).getByText("Confidential")).toBeInTheDocument();
+
+    await user.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    expect(callsTo(fetchMock, "PUT", `/admin/documents/${DOC.doc_id}/confidential`)).toEqual([
+      { confidential: true },
+      { confidential: false },
+    ]);
+  });
+
+  it("warns when confidential documents exist but no local model is set up", async () => {
+    loggedIn([{ ...DOC, confidential: true }], {
+      "GET /admin/model": () => jsonResponse({ current: "x", options: [{ kind: "cloud" }] }),
+    });
+    renderApp("/admin");
+
+    expect(await screen.findByText(/No local model is set up/)).toBeInTheDocument();
+  });
+
+  it("does not warn when a local model is set up", async () => {
+    loggedIn([{ ...DOC, confidential: true }], {
+      "GET /admin/model": () => jsonResponse(MODELS_WITH_LOCAL),
+    });
+    renderApp("/admin");
+
+    await screen.findByText("Leave_Policy.txt");
+    await waitFor(() => expect(screen.queryByText(/No local model is set up/)).not.toBeInTheDocument());
   });
 });
 

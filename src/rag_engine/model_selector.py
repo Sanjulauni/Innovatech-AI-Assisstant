@@ -3,7 +3,9 @@
 The choice is saved to a small JSON file (``MODEL_SELECTION_FILE``) so it survives
 restarts, and it takes effect on the next question without restarting the API.
 Selecting the local model starts its server; selecting another model stops it, so
-the local model only uses memory while it is selected.
+the local model only uses memory while it is selected. Questions about confidential
+documents always use the local model (``local_llm``); if it was started only for them,
+it is stopped again after ``LOCAL_LLM_IDLE_MINUTES`` without such questions.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from src.local_llm import LocalLLMServer
-from src.model_factory import ChatModel
+from src.model_factory import ChatModel, ModelUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,11 @@ class LocalModel:
     label: str
     server: LocalLLMServer
 
+
+NO_LOCAL_MODEL_MESSAGE = (
+    "This question needs confidential documents, which only the local model may read, "
+    "and no local model is set up. Please contact an administrator."
+)
 
 _LOCAL_DESCRIPTION = (
     "Runs on this server: questions and documents never leave the machine. "
@@ -81,6 +88,7 @@ class ModelSelector:
         factory: Callable[[str], ChatModel],
         store_path: Path | None = None,
         local: LocalModel | None = None,
+        idle_seconds: float | None = None,
     ) -> None:
         if not available:
             raise ValueError("At least one model must be available.")
@@ -93,6 +101,9 @@ class ModelSelector:
         self._models: dict[str, ChatModel] = {}
         self._selected: str | None = None  # used when there is no file to save to
         self._lock = threading.Lock()
+        # Stops a local server that was started only for confidential questions.
+        self._idle_seconds = idle_seconds
+        self._idle_timer: threading.Timer | None = None
 
     @property
     def default(self) -> str:
@@ -129,6 +140,7 @@ class ModelSelector:
     def select(self, model_id: str) -> str:
         if model_id not in self._available:
             raise ValueError(f"'{model_id}' is not one of the available models.")
+        previous = self.current()
         with self._lock:
             self._selected = model_id
             if self._path is not None:
@@ -140,8 +152,11 @@ class ModelSelector:
         logger.info("Chat model changed to %s", model_id)
         if self._local is not None:
             if self._is_local(model_id):
+                self._cancel_idle_stop()
                 self._local.server.start()  # loads in the background; retries after an error
-            else:
+            elif self._is_local(previous):
+                # Switching away from the local model frees its memory. (Re-selecting a
+                # cloud model leaves a server running for confidential questions alone.)
                 self._local.server.stop()
         return model_id
 
@@ -152,6 +167,7 @@ class ModelSelector:
 
     def shutdown(self) -> None:
         """At shutdown: stop the local model's server."""
+        self._cancel_idle_stop()
         if self._local is not None:
             self._local.server.stop()
 
@@ -164,10 +180,50 @@ class ModelSelector:
         model_id = self.current()
         if self._is_local(model_id):
             self._local.server.wait_until_ready()
+        return self._model(model_id)
+
+    def local_llm(self) -> ChatModel:
+        """The local model, whatever is selected: for questions about confidential documents.
+
+        Starts its server if needed and waits for it. Raises ``ModelUnavailableError`` if
+        there is no local model or it can't be started, so confidential text is never
+        sent to a cloud model instead.
+        """
+        if self._local is None:
+            raise ModelUnavailableError(NO_LOCAL_MODEL_MESSAGE)
+        self._local.server.wait_until_ready()
+        if not self.local_selected():
+            self._schedule_idle_stop()
+        return self._model(self._local.id)
+
+    def _model(self, model_id: str) -> ChatModel:
         with self._lock:
             if model_id not in self._models:
                 self._models[model_id] = self._factory(model_id)
             return self._models[model_id]
+
+    def _schedule_idle_stop(self) -> None:
+        """(Re)start the countdown to stopping an on-demand local server."""
+        if self._idle_seconds is None:
+            return
+        timer = threading.Timer(self._idle_seconds, self._stop_if_idle)
+        timer.daemon = True
+        with self._lock:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+            self._idle_timer = timer
+        timer.start()
+
+    def _cancel_idle_stop(self) -> None:
+        with self._lock:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+
+    def _stop_if_idle(self) -> None:
+        if self._local is not None and not self.local_selected():
+            logger.info("Stopping the local model: no confidential questions for a while")
+            self._local.server.stop()
 
     def _read(self) -> str | None:
         if self._path is None:

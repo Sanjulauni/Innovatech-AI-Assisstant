@@ -7,6 +7,8 @@ import {
   CopyCheck,
   FileText,
   Loader2,
+  Lock,
+  LockOpen,
   Search,
   Trash2,
   UploadCloud,
@@ -17,13 +19,15 @@ import { Alert, Button, Card, Spinner } from "../../components/ui";
 import {
   ApiError,
   deleteDocument,
+  getModels,
   getUploadLimit,
   listDocuments,
   reindexDocuments,
+  setConfidential,
   uploadDocument,
 } from "../../lib/api";
 import type { ReindexResult, StoredDocument } from "../../lib/types";
-import { DOCUMENTS_KEY, UPLOAD_LIMIT_KEY } from "./session";
+import { DOCUMENTS_KEY, MODELS_KEY, UPLOAD_LIMIT_KEY } from "./session";
 import { UploadLimitSetting } from "./UploadLimitSetting";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".txt", ".md"];
@@ -139,19 +143,30 @@ function DocumentRow({ document }: { document: StoredDocument }) {
     mutationFn: () => deleteDocument(document.doc_id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY }),
   });
+  const toggle = useMutation({
+    mutationFn: () => setConfidential(document.doc_id, !document.confidential),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY }),
+  });
+  const error = mutation.error ?? toggle.error;
 
   return (
     <li className="flex flex-wrap items-center gap-3 px-4 py-3">
       <FileText className="size-5 shrink-0 text-slate-400" aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{document.source}</p>
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <span className="truncate">{document.source}</span>
+          {document.confidential && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900/60">
+              <Lock className="size-3" aria-hidden />
+              Confidential
+            </span>
+          )}
+        </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
           {document.chunk_count} chunk{document.chunk_count === 1 ? "" : "s"} · added{" "}
           {formatDate(document.ingested_at)}
         </p>
-        {mutation.error instanceof ApiError && (
-          <p className="text-xs text-red-600">{mutation.error.message}</p>
-        )}
+        {error instanceof ApiError && <p className="text-xs text-red-600">{error.message}</p>}
       </div>
       {confirming ? (
         <div className="flex items-center gap-2">
@@ -164,13 +179,35 @@ function DocumentRow({ document }: { document: StoredDocument }) {
           </Button>
         </div>
       ) : (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setConfirming(true)}
-          aria-label={`Delete ${document.source}`}
-          icon={<Trash2 className="size-4" />}
-        />
+        <div className="flex items-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={toggle.isPending}
+            onClick={() => toggle.mutate()}
+            aria-pressed={document.confidential}
+            aria-label={`Confidential: ${document.source}`}
+            title={
+              document.confidential
+                ? "Confidential: only the local model may read it. Click to unmark."
+                : "Mark as confidential: only the local model may read it."
+            }
+            icon={
+              document.confidential ? (
+                <Lock className="size-4 text-emerald-600" />
+              ) : (
+                <LockOpen className="size-4" />
+              )
+            }
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirming(true)}
+            aria-label={`Delete ${document.source}`}
+            icon={<Trash2 className="size-4" />}
+          />
+        </div>
       )}
     </li>
   );
@@ -238,6 +275,11 @@ export function DocumentsPanel() {
   const documents = useQuery({ queryKey: DOCUMENTS_KEY, queryFn: listDocuments });
   const uploadLimit = useQuery({ queryKey: UPLOAD_LIMIT_KEY, queryFn: getUploadLimit });
   const limitMb = uploadLimit.data?.max_upload_size_mb;
+  const models = useQuery({ queryKey: MODELS_KEY, queryFn: getModels });
+  const [confidential, setConfidentialUploads] = useState(false);
+  const anyConfidential = confidential || (documents.data ?? []).some((d) => d.confidential);
+  // Without a local model, questions that need confidential documents are refused.
+  const noLocalModel = models.data !== undefined && !models.data.options.some((o) => o.kind === "local");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [filter, setFilter] = useState("");
   const busy = uploads.some((u) => u.status === "waiting" || u.status === "uploading");
@@ -269,7 +311,7 @@ export function DocumentsPanel() {
       }
       setItem(item.id, { status: "uploading" });
       try {
-        const result = await uploadDocument(file);
+        const result = await uploadDocument(file, confidential);
         setItem(item.id, { status: result.status, message: result.message });
         await queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY });
       } catch (error) {
@@ -295,6 +337,30 @@ export function DocumentsPanel() {
         <div className="mt-4">
           <Dropzone onFiles={upload} busy={busy} />
         </div>
+        <label className="mt-3 flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={confidential}
+            onChange={(event) => setConfidentialUploads(event.target.checked)}
+            className="mt-0.5 size-4 rounded border-slate-300 accent-emerald-600"
+          />
+          <span>
+            <span className="font-medium">Confidential</span>
+            <span className="block text-xs text-slate-500 dark:text-slate-400">
+              For SOPs and other private documents. Questions about them are answered only by
+              the local model, never sent to a cloud model.
+            </span>
+          </span>
+        </label>
+        {noLocalModel && anyConfidential && (
+          <div className="mt-3">
+            <Alert tone="info">
+              No local model is set up, so questions that need confidential documents will be
+              refused. Set <code>LOCAL_LLM_SERVER</code> and <code>LOCAL_LLM_MODEL</code> in the
+              server&apos;s <code>.env</code>.
+            </Alert>
+          </div>
+        )}
         <div className="mt-3">
           <UploadLimitSetting />
         </div>
