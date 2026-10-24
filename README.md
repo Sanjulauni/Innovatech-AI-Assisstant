@@ -63,6 +63,22 @@
 
 ---
 
+## 📸 Screenshots
+
+![Chat answer with cited sources](docs/screenshots/02-chat-answer-with-sources-light.png)
+*An answer from the company handbook. Each `[1]` chip links to the excerpt it came from.*
+
+| | |
+|---|---|
+| ![Source excerpts](docs/screenshots/03-chat-source-excerpt-light.png) | ![Answer not in the documents](docs/screenshots/05-chat-not-in-documents-light.png) |
+| **Sources:** file, page and the excerpt used | **Grounded:** follow-ups keep context; it says so when the documents don't have the answer |
+| ![Admin documents](docs/screenshots/07-admin-documents-light.png) | ![Admin model choice, dark theme](docs/screenshots/09-admin-model-dark.png) |
+| **Admin – Documents:** upload, delete, mark confidential, set max file size | **Admin – Model:** Groq cloud models or a private local model (dark theme) |
+
+More screenshots, in light and dark themes, are in [`docs/screenshots`](docs/screenshots).
+
+---
+
 ## 🏗️ System Architecture & Workflow
 
 The application follows the standard Software Development Life Cycle (SDLC) tailored for AI systems, adhering strictly to **Object-Oriented Programming (OOP)** and enterprise design patterns.
