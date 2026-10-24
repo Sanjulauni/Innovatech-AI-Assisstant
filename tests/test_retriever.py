@@ -3,11 +3,14 @@
 A fake chat model records the prompts it receives, so no real model is called.
 """
 
+import uuid
+
+import chromadb
 import pytest
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.data_pipeline.vector_store import SearchResult
+from src.data_pipeline.vector_store import SearchResult, VectorStoreRepository
 from src.rag_engine.instructions import InstructionsStore
 from src.rag_engine.llm_chain import (
     RAGChain,
@@ -24,10 +27,11 @@ from src.rag_engine.prompts import (
     build_system_prompt,
     format_context,
 )
-from src.rag_engine.retriever import DocumentRetriever, build_search_query
+from src.rag_engine.retriever import DocumentRetriever, previous_question
 from tests.conftest import make_settings
 from tests.fakes import (
     BrokenChatModel,
+    KeywordEmbeddings,
     OverloadedChatModel,
     RateLimitedChatModel,
     RecordingChatModel,
@@ -78,17 +82,53 @@ def test_retriever_from_settings(repository):
     assert retriever._top_k == 7
 
 
-def test_search_query_includes_previous_user_message():
+def test_previous_question_is_the_last_user_message():
     history = [
-        ChatMessage("user", "How many leave days do employees get?"),
+        ChatMessage("user", "  How many leave days do employees get?  "),
         ChatMessage("assistant", "14 days [1]."),
     ]
-    query = build_search_query("And contractors?", history)
-    assert query == "How many leave days do employees get?\nAnd contractors?"
+    assert previous_question(history) == "How many leave days do employees get?"
+    assert previous_question([]) == previous_question(None) == ""
 
 
-def test_search_query_without_history():
-    assert build_search_query("  Office hours?  ") == "Office hours?"
+@pytest.fixture
+def topics():
+    """A small store where each topic's words only appear in its own documents."""
+    embeddings = KeywordEmbeddings(["cane", "sensor", "dress", "code", "leave", "contractors"])
+    repository = VectorStoreRepository.create(
+        embeddings, collection_name=f"topics-{uuid.uuid4().hex}", client=chromadb.EphemeralClient()
+    )
+    add_doc(repository, "cane", "cane.md", "The cane uses a sensor. The cane sensor beeps.")
+    add_doc(repository, "dress", "dress.md", "Dress code: smart casual.")
+    add_doc(repository, "leave", "leave.md", "Contractors get no paid leave.")
+    parking = "Contractors park near the dress shop. Contractors only."
+    add_doc(repository, "parking", "parking.md", parking)
+    return repository
+
+
+def sources(results):
+    return [r.document.metadata["source"] for r in results]
+
+
+def test_a_new_topic_finds_the_new_topic(topics):
+    history = [ChatMessage("user", "How does the cane sensor work?")]
+    results = DocumentRetriever(topics, top_k=1).retrieve("What is the dress code?", history)
+    assert sources(results) == ["dress.md"]
+
+
+def test_a_follow_up_still_finds_the_earlier_topic(topics):
+    retriever = DocumentRetriever(topics, top_k=1)
+    # On its own, "contractors" matches the parking rules best...
+    assert sources(retriever.retrieve("And contractors?")) == ["parking.md"]
+    # ...but after a question about leave, the leave policy (which covers contractors).
+    history = [ChatMessage("user", "How many leave days?"), ChatMessage("assistant", "14.")]
+    assert sources(retriever.retrieve("And contractors?", history)) == ["leave.md"]
+
+
+def test_excluded_documents_are_never_returned(topics):
+    results = DocumentRetriever(topics, top_k=4).retrieve("cane sensor", exclude_doc_ids={"cane"})
+    assert "cane.md" not in sources(results)
+    assert len(results) == 3
 
 
 # --- Prompts -------------------------------------------------------------------
@@ -296,7 +336,7 @@ def test_retrieval_failure_raises_service_unavailable(repository, monkeypatch):
     def fail(*_args, **_kwargs):
         raise ConnectionError("embedding API down")
 
-    monkeypatch.setattr(repository, "search", fail)
+    monkeypatch.setattr(repository, "embed_query", fail)
     chain, _ = make_chain(repository, ["x"])
 
     with pytest.raises(ServiceUnavailableError, match="document search is unavailable"):
@@ -360,7 +400,7 @@ def test_stream_raises_retrieval_errors_on_first_next(repository, monkeypatch):
     def fail(*_args, **_kwargs):
         raise ConnectionError("embedding API down")
 
-    monkeypatch.setattr(repository, "search", fail)
+    monkeypatch.setattr(repository, "embed_query", fail)
     chain, _ = make_chain(repository, ["x"])
     stream = chain.stream("anything")
 

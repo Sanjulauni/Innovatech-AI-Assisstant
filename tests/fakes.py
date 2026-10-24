@@ -1,7 +1,9 @@
 """Fake models used in tests, so no real model or API is ever called."""
 
+import re
 from typing import Any
 
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from pydantic import Field
 
@@ -74,3 +76,24 @@ class StubLocalServer:
 
     def refresh(self):
         return self._state
+
+
+class KeywordEmbeddings(Embeddings):
+    """Bag-of-words vectors over a fixed vocabulary, so texts that share words are similar.
+
+    Unlike random fake embeddings, rankings are predictable, which retrieval tests need.
+    """
+
+    def __init__(self, vocabulary: list[str]) -> None:
+        self.vocabulary = [word.lower() for word in vocabulary]
+
+    def _vector(self, text: str) -> list[float]:
+        words = re.findall(r"[a-z]+", text.lower())
+        # A small constant keeps texts without known words from being all zeros.
+        return [float(words.count(word)) for word in self.vocabulary] + [0.1]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector(text)

@@ -302,10 +302,16 @@ Some documents, such as SOPs, should never be sent to a cloud service. The admin
 them **confidential**: tick *Confidential* before uploading, or click the lock next to a
 document in **Admin → Documents**. The change applies from the next question.
 
-When a question is asked, the documents are searched first. If any excerpt found comes
-from a confidential document, **that question is answered by the local model**, whichever
-model is selected. The chat marks the answer as answered privately, and its sources show
-which documents are confidential.
+When a question is asked, the documents are searched first. If the question is about a
+confidential document, **that question is answered by the local model**, whichever model
+is selected. The chat marks the answer as answered privately, and its sources show which
+documents are confidential. Every question is routed on its own: after a confidential
+question, a normal question goes back to the selected model.
+
+A question counts as being about a confidential document only if the question **on its
+own** matches it (not just because of the previous question), and the confidential
+excerpt is among those the local model would read. Otherwise the confidential excerpts
+are left out and the next best normal excerpts are used instead.
 
 - **No cloud fallback.** If no local model is set up, or it can't be started, the question
   is refused with a message instead. The admin page warns about this when documents are

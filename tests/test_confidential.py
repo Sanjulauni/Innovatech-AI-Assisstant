@@ -11,6 +11,7 @@ import pytest
 from langchain_core.documents import Document
 
 from src.data_pipeline.confidential import ConfidentialStore
+from src.data_pipeline.vector_store import SearchResult
 from src.local_llm import ServerState, ServerStatus
 from src.rag_engine.llm_chain import RAGChain, ServiceUnavailableError
 from src.rag_engine.model_selector import LocalModel, ModelSelector
@@ -211,7 +212,7 @@ def test_confidential_history_is_kept_for_the_local_model(docs, tmp_path):
         ChatMessage("assistant", "Stop the queue, then reboot [1].", confidential=True),
     ]
 
-    chain.ask("And after the reboot, what does the SOP say?", history)
+    chain.ask(SOP_TEXT, history)  # a question that matches the SOP itself
 
     assert "Stop the queue" in prompt_text(models.local)
 
@@ -279,3 +280,105 @@ def test_running_local_model_shows_as_running_in_the_model_list(tmp_path):
     server = StubLocalServer(ServerState(ServerStatus.READY))
     models = Models(tmp_path, server=server)
     assert models.selector.options()[-1].status == "ready"
+
+
+# --- Only questions that are themselves about confidential documents go local ------------
+
+
+class ScriptedRetriever:
+    """Returns set results for a search with history, the question alone, or with
+    confidential documents excluded, and records which searches were made."""
+
+    def __init__(self, with_history, alone, excluded):
+        self.results = {"with_history": with_history, "alone": alone, "excluded": excluded}
+        self.calls = []
+
+    def retrieve(self, question, history=None, k=None, exclude_doc_ids=()):
+        kind = "excluded" if exclude_doc_ids else "with_history" if history else "alone"
+        self.calls.append(kind)
+        return self.results[kind]
+
+
+def hit(doc_id, text):
+    return SearchResult(Document(text, metadata={"doc_id": doc_id, "source": f"{doc_id[:4]}.md"}),
+                        0.8)
+
+
+CANE = hit(SOP, "The smart cane detects obstacles with an ultrasonic sensor.")
+DRESS = hit(POLICY, "Dress code: smart casual.")
+AFTER_CANE = [ChatMessage("user", "How does the smart cane detect obstacles?"),
+              ChatMessage("assistant", "With an ultrasonic sensor [1].", confidential=True)]
+
+
+def scripted_chain(retriever, selector):
+    store = ConfidentialStore()
+    store.set(SOP, True)
+    return RAGChain(retriever, selector, history_limit=6, local_top_k=1,
+                    local_history_limit=2, confidential=store)
+
+
+def test_new_topic_after_a_confidential_question_uses_the_cloud_model(tmp_path):
+    # The previous (confidential) question drags the cane document into the search,
+    # but the new question on its own doesn't match it: it's a change of topic.
+    retriever = ScriptedRetriever(with_history=[CANE, DRESS], alone=[DRESS],
+                                  excluded=[DRESS])
+    models = Models(tmp_path)
+
+    answer = scripted_chain(retriever, models.selector).ask("What is the dress code?", AFTER_CANE)
+
+    assert answer.private is False
+    assert answer.answer == "Cloud answer [1]."
+    assert models.local.prompts == [] and models.server.calls == []
+    sent = prompt_text(models.cloud)
+    assert "Dress code" in sent
+    assert "ultrasonic" not in sent  # neither the excerpt nor the earlier answer
+    assert retriever.calls == ["with_history", "alone", "excluded"]
+
+
+def test_follow_up_that_matches_the_confidential_document_stays_local(tmp_path):
+    retriever = ScriptedRetriever(with_history=[CANE], alone=[CANE], excluded=[DRESS])
+    models = Models(tmp_path)
+
+    answer = scripted_chain(retriever, models.selector).ask("What sensor does it use?", AFTER_CANE)
+
+    assert answer.private is True
+    assert models.cloud.prompts == []
+    assert retriever.calls == ["with_history", "alone"]  # nothing was excluded
+
+
+def test_no_extra_search_when_no_confidential_document_is_found(tmp_path):
+    retriever = ScriptedRetriever(with_history=[DRESS], alone=[CANE], excluded=[])
+    models = Models(tmp_path)
+
+    scripted_chain(retriever, models.selector).ask("What is the dress code?", AFTER_CANE)
+
+    assert retriever.calls == ["with_history"]
+
+
+def test_every_question_is_routed_on_its_own(tmp_path):
+    # Confidential, then normal, then confidential again: the model follows each question.
+    models = Models(tmp_path)
+    confidential = ScriptedRetriever(with_history=[CANE], alone=[CANE], excluded=[DRESS])
+    normal = ScriptedRetriever(with_history=[CANE, DRESS], alone=[DRESS], excluded=[DRESS])
+
+    first = scripted_chain(confidential, models.selector).ask("How does the cane work?")
+    second = scripted_chain(normal, models.selector).ask("And the dress code?", AFTER_CANE)
+    third = scripted_chain(confidential, models.selector).ask("And its sensor?", AFTER_CANE)
+
+    assert [first.private, second.private, third.private] == [True, False, True]
+    assert len(models.local.prompts) == 2 and len(models.cloud.prompts) == 1
+
+
+def test_confidential_excerpt_below_the_local_models_view_does_not_route_locally(tmp_path):
+    # The cloud search found the cane document only in 2nd place, but the local model
+    # would read just the top 1 (DRESS): answering locally would be slow and pointless.
+    retriever = ScriptedRetriever(with_history=[DRESS, CANE], alone=[DRESS, CANE],
+                                  excluded=[DRESS])
+    models = Models(tmp_path)
+
+    answer = scripted_chain(retriever, models.selector).ask("What is the dress code?")
+
+    assert answer.private is False
+    assert models.local.prompts == []
+    assert "ultrasonic" not in prompt_text(models.cloud)
+    assert retriever.calls == ["alone", "excluded"]  # no history: the first search is "alone"

@@ -110,7 +110,7 @@ Priority uses **MoSCoW**: **M**ust, **S**hould, **C**ould, **W**on't (this relea
 | FR-13 | The system shall generate an answer with the **chat model selected by the administrator** (a Groq cloud model or the local model), using only the retrieved chunks as context. | M | 🔄 |
 | FR-14 | The system shall return the **source citations** (document name, page and an excerpt) used to produce each answer, numbered as cited in the text (`[1]`). | M | ✅ |
 | FR-15 | When the retrieved context does not contain the answer, the system shall say it could not find the information rather than invent one. | M | ✅ |
-| FR-16 | The system shall support follow-up questions within a chat session (the last 6 messages for cloud models, 2 for the local model). | S | ✅ |
+| FR-16 | The system shall support follow-up questions within a chat session (the last 6 messages for cloud models, 2 for the local model). The search combines the new question with the previous one, weighting the new question most, so follow-ups find the earlier topic while a new topic finds its own documents. | S | ✅ |
 | FR-17 | The system shall summarize a specified document on request. | C | ❌ |
 | FR-18 | The system shall stream the answer to the UI as it is generated. | C | ✅ |
 
@@ -170,7 +170,7 @@ All endpoints are served under the `/api` prefix.
 | FR-41 | When `LOCAL_LLM_SERVER` and `LOCAL_LLM_MODEL` are configured, the system shall offer a local GGUF model. The API starts `llama-server` when it is needed and stops it when another model is selected (or after 15 idle minutes if it was started only for confidential questions), and restarts it after a crash. | S | ✅ |
 | FR-42 | The admin panel shall show the local model's state (stopped, loading, running, or the reason it failed) and let the administrator retry after an error. | S | ✅ |
 | FR-43 | The administrator shall mark documents as **confidential**, when uploading or later from the document list. | S | ✅ |
-| FR-44 | If any retrieved chunk comes from a confidential document, the question shall be answered by the local model, whichever model is selected; if no local model is available, the question shall be refused with a clear message. | S | ✅ |
+| FR-44 | If a question is about a confidential document, it shall be answered by the local model, whichever model is selected; if no local model is available, the question shall be refused with a clear message. A question is about a confidential document when the question on its own matches it and the confidential excerpt is among those the local model reads. Otherwise the confidential excerpts are left out and the selected model answers, so each question is routed on its own. | S | ✅ |
 | FR-45 | Answers based on confidential documents shall be marked as answered privately, and their sources shown as confidential. | C | ✅ |
 
 ---

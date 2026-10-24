@@ -60,6 +60,11 @@ def _doc_id(result: SearchResult) -> str:
     return str(result.document.metadata.get("doc_id", ""))
 
 
+def _touches(results: list[SearchResult], confidential: frozenset[str]) -> bool:
+    """Whether any of the chunks comes from a confidential document."""
+    return any(_doc_id(result) in confidential for result in results)
+
+
 def _without_confidential_turns(history: list[ChatMessage]) -> list[ChatMessage]:
     """Drop answers based on confidential documents, and the questions that led to them."""
     kept: list[ChatMessage] = []
@@ -76,7 +81,10 @@ class RAGChain:
     """Answers questions from the indexed documents, with numbered source citations.
 
     If any retrieved excerpt comes from a document the admin marked confidential, the
-    question is answered by the local model, whichever model is selected. If there is no
+    question is answered by the local model, whichever model is selected. Confidential
+    excerpts are only used if the question itself matches them: if they were found only
+    because of the previous question (a change of topic), they are left out and the
+    selected model answers from the other documents. If there is no
     local model, or it can't be started, the question is refused: confidential text is
     never sent to a cloud model. Earlier answers based on confidential documents are
     likewise left out of the history sent to a cloud model.
@@ -172,21 +180,17 @@ class RAGChain:
             raise ValueError("The question is empty.")
         history = [m for m in history or [] if m.content.strip()]
         local_selected = isinstance(self._llm, ModelSelector) and self._llm.local_selected()
+        confidential = self._confidential.ids() if self._confidential else frozenset()
         try:
-            results = self._retriever.retrieve(
-                question, history, k=self._local_top_k if local_selected else None
-            )
+            results = self._search(question, history, confidential, local_selected)
         except Exception as exc:
             logger.error("Retrieval failed: %s", exc)
             raise ServiceUnavailableError(
                 "The document search is unavailable right now. Please try again shortly."
             ) from exc
 
-        confidential = self._confidential.ids() if self._confidential else frozenset()
-        private = any(_doc_id(result) in confidential for result in results)
+        private = _touches(results, confidential)
         local = local_selected or private
-        if private and not local_selected and self._local_top_k:
-            results = results[: self._local_top_k]  # the local model's smaller prompt
         if local:
             limit = self._local_history_limit
             if limit is None:
@@ -196,6 +200,34 @@ class RAGChain:
             limit = self._history_limit
         route = Route(local=local, private=private)
         return _Plan(question, self._trim(history, limit), results, route, confidential)
+
+    def _search(
+        self,
+        question: str,
+        history: list[ChatMessage],
+        confidential: frozenset[str],
+        local_selected: bool,
+    ) -> list[SearchResult]:
+        """The excerpts to answer with. They include confidential ones only if the
+        question is about them; otherwise those are replaced by the next best others.
+
+        A question is about a confidential document when both hold:
+        - a confidential excerpt is among those the local model would read (its top-k
+          is smaller), not just further down the list;
+        - the question matches it on its own, not only because of the previous question
+          (after a confidential question, the next one may be on a new topic).
+        """
+        k = self._local_top_k if local_selected else None
+        results = self._retriever.retrieve(question, history, k=k)
+        if not _touches(results, confidential):
+            return results
+
+        local_view = results if local_selected else results[: self._local_top_k or None]
+        if _touches(local_view, confidential) and _touches(
+            self._retriever.retrieve(question, k=k), confidential
+        ):
+            return local_view  # answered by the local model, with its smaller prompt
+        return self._retriever.retrieve(question, history, k=k, exclude_doc_ids=confidential)
 
     def _messages(self, plan: _Plan) -> list[BaseMessage]:
         admin_instructions = self._instructions.get().text if self._instructions else ""

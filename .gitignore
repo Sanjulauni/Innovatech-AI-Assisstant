@@ -36,3 +36,8 @@ data/models/
 
 # Sample company documents for local testing (third-party, not committed)
 sample_docs/
+
+# Claude Code (local settings and outputs)
+.claude/
+Claude outputs/
+CLAUDE.md

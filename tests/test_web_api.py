@@ -229,7 +229,7 @@ def test_chat_stream_retrieval_failure_is_503(client, repository, monkeypatch):
     def fail(*_args, **_kwargs):
         raise ConnectionError("embeddings down")
 
-    monkeypatch.setattr(repository, "search", fail)
+    monkeypatch.setattr(repository, "embed_query", fail)
     response = client.post("/api/chat/stream", json={"question": "Hi?"})
     assert response.status_code == 503
 

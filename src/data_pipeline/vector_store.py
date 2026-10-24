@@ -8,6 +8,7 @@ talks to ``VectorStoreRepository`` only and never imports ChromaDB directly.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from langchain_chroma import Chroma
@@ -138,9 +139,23 @@ class VectorStoreRepository:
 
     def search(self, query: str, k: int) -> list[SearchResult]:
         """Return the ``k`` chunks most similar to ``query``, best first."""
+        return self.search_by_vector(self.embed_query(query), k)
+
+    def embed_query(self, text: str) -> list[float]:
+        """The query embedding of ``text``, as used by ``search``."""
+        return self._store.embeddings.embed_query(text)
+
+    def search_by_vector(
+        self, vector: list[float], k: int, exclude_doc_ids: Collection[str] = ()
+    ) -> list[SearchResult]:
+        """Return the ``k`` chunks most similar to ``vector``, best first, skipping the
+        chunks of the documents in ``exclude_doc_ids``."""
         if self.count_chunks() == 0:
             return []
-        results = self._store.similarity_search_with_score(query, k=k)
+        where = {DOC_ID: {"$nin": sorted(exclude_doc_ids)}} if exclude_doc_ids else None
+        results = self._store.similarity_search_by_vector_with_relevance_scores(
+            list(vector), k=k, filter=where
+        )
         # Chroma returns cosine *distance* (0 = identical, 2 = opposite).
         return [
             SearchResult(document=doc, score=max(0.0, min(1.0, 1.0 - distance)))
